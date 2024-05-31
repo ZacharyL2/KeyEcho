@@ -1,0 +1,50 @@
+{
+  "build": {
+    "beforeBuildCommand": "pnpm build",
+    "devPath": "http://localhost:1426",
+    "distDir": "../dist"
+  },
+  "package": {
+    "productName": "KeyEcho",
+    "version": "0.0.0"
+  },
+  "tauri": {
+    "systemTray": {
+      "iconPath": "icons/icon.ico",
+      "iconAsTemplate": true
+    },
+    "allowlist": {
+      "all": false,
+      "fs": {
+        "all": true,
+        "scope": ["**"]
+      },
+      "path": {
+        "all": true
+      }
+    },
+    "windows": [
+      {
+        "title": "Dashboard",
+        "width": 800,
+        "height": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "bundle": {
+      "active": true,
+      "targets": "all",
+      "identifier": "xyz.waveapps.keyecho",
+      "resources": ["resources/*"],
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ]
+    }
+  }
+}

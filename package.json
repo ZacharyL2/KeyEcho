@@ -1,0 +1,21 @@
+{
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@8.15.7",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^1.5.6",
+    "vue": "^3.4.27"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^1.5.14",
+    "@vitejs/plugin-vue": "^5.0.4",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.12",
+    "vue-tsc": "^2.0.19"
+  }
+}
