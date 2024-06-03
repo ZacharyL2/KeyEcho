@@ -14,7 +14,7 @@ use symphonia::{
     default::get_probe,
 };
 
-pub struct SymphoniaDecoder {
+pub struct SoundDecoder {
     decoder: Box<dyn Decoder>,
     format: Box<dyn FormatReader>,
     rate: u32,
@@ -22,7 +22,7 @@ pub struct SymphoniaDecoder {
     time_base: TimeBase,
 }
 
-impl SymphoniaDecoder {
+impl SoundDecoder {
     pub fn new<P>(path: P) -> Result<Self>
     where
         P: AsRef<Path>,
@@ -61,7 +61,7 @@ impl SymphoniaDecoder {
         let channels = channels.map(|c| c.count() as u16).context("no channels")?;
         let time_base = time_base.context("no time base")?;
 
-        Ok(SymphoniaDecoder {
+        Ok(SoundDecoder {
             decoder,
             format,
 

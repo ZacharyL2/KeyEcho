@@ -1,1 +1,2 @@
-pub fn setup() {}
+pub mod tray;
+pub mod window;
