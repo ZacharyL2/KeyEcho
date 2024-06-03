@@ -1,41 +1,40 @@
 use std::{
-    path::PathBuf,
-    sync::{mpsc, Arc},
+    sync::{Arc, Mutex},
     thread,
 };
 
-use anyhow::{Context, Result};
-use tauri::{ActivationPolicy, App, Manager};
-use tauri_plugin_store::StoreBuilder;
+use anyhow::Result;
+use tauri::{App, Manager};
 
-use crate::keyecho;
-
-pub struct KeyEchoConfig {
-    pub volume: f32,
-    pub soundpack_dir: PathBuf,
-}
+use crate::{
+    features::{
+        tray::create_tray_menu,
+        window::{show_window, WindowLabel},
+    },
+    keyecho::{run, KeySoundpack},
+};
 
 pub fn resolve_setup(app: &mut App) -> Result<()> {
     #[cfg(target_os = "macos")]
-    app.set_activation_policy(ActivationPolicy::Accessory);
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-    let path_resolver = app.path_resolver();
-    let app_data_dir = path_resolver.app_data_dir().context("no data dir")?;
-    let _store = StoreBuilder::new(app.handle(), app_data_dir.join("config.json")).build();
+    let app_handle = app.handle();
 
-    let resource_dir = path_resolver.resource_dir().context("no resource dir")?;
-    let (tx, rx) = mpsc::channel();
-    let tx = Arc::new(tx);
+    app_handle
+        .tray_handle()
+        .set_menu(create_tray_menu(&app_handle))?;
 
-    app.manage(tx);
+    let soundpack = KeySoundpack::try_load(app_handle)?;
+
+    if soundpack.current_sound().is_none() {
+        show_window(&app.app_handle(), WindowLabel::Dashboard)?;
+    }
+
+    let soundpack = Arc::new(Mutex::new(soundpack));
+    app.manage(soundpack.clone());
+
     thread::spawn(move || {
-        if let Err(err) = keyecho::run(
-            rx,
-            KeyEchoConfig {
-                volume: 100.0,
-                soundpack_dir: resource_dir.join("resources/cherrymx-black-abs"),
-            },
-        ) {
+        if let Err(err) = run(soundpack) {
             println!("error while starting keyecho: {:?}", err)
         };
     });

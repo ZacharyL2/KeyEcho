@@ -1,9 +1,9 @@
-use std::sync::{
-    mpsc::{Receiver, Sender},
-    Arc,
-};
+use std::sync::{Arc, Mutex};
 
-use crate::keyecho::SoundThreadMsg;
+use tauri::State;
 
-pub type SoundThreadReceiver = Receiver<SoundThreadMsg>;
-pub type SoundThreadSender = Arc<Sender<SoundThreadMsg>>;
+use crate::keyecho::KeySoundpack;
+
+pub type ArcKeySoundpack = Arc<Mutex<KeySoundpack>>;
+
+pub type KeySoundpackState<'r> = State<'r, ArcKeySoundpack>;
