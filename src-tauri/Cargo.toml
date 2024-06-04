@@ -1,7 +1,7 @@
 [package]
 name = "keyecho"
 version = "0.0.1"
-description = "A Tauri App"
+description = "Keystrokes produce delightful sounds"
 authors = ["Zachary"]
 edition = "2021"
 
@@ -9,7 +9,7 @@ edition = "2021"
 tauri-build = { version = "1", features = [] }
 
 [dependencies]
-tauri = { version = "1", features = ["system-tray", "path-all"] }
+tauri = { version = "1", features = [ "updater", "system-tray", "path-all"] }
 
 specta = "2.0.0-rc.7"
 tauri-specta = { version = "=2.0.0-rc.4", features = ["typescript"] }
@@ -48,6 +48,7 @@ core-graphics = { version = "0.22", features = ["highsierra"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0"
+openssl = { version = "0.10", features = ["vendored"] }
 x11 = { version = "2", features = ["xlib", "xrecord", "xinput"] }
 
 [profile.release]
