@@ -24,7 +24,8 @@
         "title": "Dashboard",
         "label": "Dashboard",
         "width": 600,
-        "height": 800
+        "height": 800,
+        "visible": false
       }
     ],
     "security": {
