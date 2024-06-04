@@ -23,5 +23,5 @@
     "isolatedModules": true,
     "skipLibCheck": true
   },
-  "include": ["src", "vite.config.*", "uno.config.ts"]
+  "include": ["src", "scripts", "vite.config.*", "uno.config.ts"]
 }
