@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use features::tray::on_system_tray_event;
-use tauri::SystemTray;
+use tauri::{RunEvent, SystemTray};
 
 mod commands;
 mod features;
@@ -34,13 +34,20 @@ fn main() {
 
     let context = tauri::generate_context!();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(invoke_handler)
         .plugin(tauri_plugin_single_instance::init(|_, _, _| {}))
         .plugin(tauri_plugin_store::Builder::default().build())
         .system_tray(SystemTray::new())
         .on_system_tray_event(on_system_tray_event)
         .setup(|app| Ok(setup::resolve_setup(app)?))
-        .run(context)
-        .expect("error while running tauri application");
+        .build(context)
+        .expect("error while building tauri application");
+
+    app.run(|_app_handle, event| match event {
+        RunEvent::ExitRequested { api, .. } => {
+            api.prevent_exit();
+        }
+        _ => {}
+    })
 }
