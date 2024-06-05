@@ -41,7 +41,8 @@
     },
     "bundle": {
       "active": true,
-      "targets": "all",
+      "category": "Productivity",
+      "targets": ["updater", "nsis", "app", "dmg", "deb", "appimage"],
       "identifier": "xyz.waveapps.keyecho",
       "icon": [
         "icons/32x32.png",
