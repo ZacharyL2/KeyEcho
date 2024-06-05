@@ -23,21 +23,20 @@
     },
     "allowlist": {
       "all": false,
-      "path": {
+      "process": {
+        "exit": true,
+        "relaunch": true
+      },
+      "shell": {
+        "execute": true
+      },
+      "window": {
         "all": true
       }
     },
-    "windows": [
-      {
-        "title": "Dashboard",
-        "label": "Dashboard",
-        "width": 600,
-        "height": 800,
-        "visible": false
-      }
-    ],
+    "windows": [],
     "security": {
-      "csp": null
+      "csp": "default-src blob: data: filesystem: ws: wss: http: https: tauri: asset: 'unsafe-eval' 'unsafe-inline' 'self';"
     },
     "bundle": {
       "active": true,
