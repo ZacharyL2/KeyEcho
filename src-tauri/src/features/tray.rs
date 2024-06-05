@@ -7,7 +7,7 @@ use tauri::{
 
 use crate::commands::exit_app;
 
-use super::window::{show_window, WindowLabel};
+use super::window::{show_dashboard, WindowLabel};
 
 #[derive(EnumString, AsRefStr, Display, PartialEq, Debug)]
 enum MenuItemId {
@@ -41,7 +41,7 @@ pub fn on_system_tray_event(app_handle: &AppHandle, event: SystemTrayEvent) {
     match event {
         SystemTrayEvent::MenuItemClick { id, .. } => match MenuItemId::from_str(id.as_str()) {
             Ok(MenuItemId::OpenDashboard) => {
-                let _ = show_window(app_handle, WindowLabel::Dashboard);
+                let _ = show_dashboard(app_handle);
             }
             Ok(MenuItemId::Restart) => api::process::restart(&app_handle.env()),
             Ok(MenuItemId::Quit) => exit_app(app_handle.clone()),

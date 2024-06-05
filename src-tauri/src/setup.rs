@@ -7,10 +7,7 @@ use anyhow::Result;
 use tauri::{App, Manager};
 
 use crate::{
-    features::{
-        tray::create_tray_menu,
-        window::{show_window, WindowLabel},
-    },
+    features::{tray::create_tray_menu, window::show_dashboard},
     keyecho::{run, KeySoundpack},
 };
 
@@ -27,7 +24,7 @@ pub fn resolve_setup(app: &mut App) -> Result<()> {
     let soundpack = KeySoundpack::try_load(app_handle)?;
 
     if soundpack.current_sound().is_none() {
-        show_window(&app.app_handle(), WindowLabel::Dashboard)?;
+        show_dashboard(&app.app_handle())?;
     }
 
     let soundpack = Arc::new(Mutex::new(soundpack));
