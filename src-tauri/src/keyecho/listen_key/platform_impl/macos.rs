@@ -1,5 +1,5 @@
 #![allow(improper_ctypes_definitions)]
-use std::{convert::TryInto, os::raw::c_void, ptr::addr_of_mut, time::SystemTime};
+use std::{convert::TryInto, os::raw::c_void, ptr::addr_of_mut};
 
 use cocoa::{
     base::{id, nil},
@@ -9,7 +9,7 @@ use core_graphics::event::{
     CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGKeyCode, EventField,
 };
 
-use super::{Key, ListenError, ListenEvent, ListenEventType};
+use super::{Key, ListenError, ListenKeyEvent};
 
 fn key_from_code(code: CGKeyCode) -> Key {
     match code {
@@ -153,11 +153,11 @@ enum CGEventTapOption {
     ListenOnly = 1,
 }
 
-static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(ListenEvent)>> = None;
+static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(ListenKeyEvent)>> = None;
 
 pub fn listen<T>(callback: T) -> Result<(), ListenError>
 where
-    T: FnMut(ListenEvent) + 'static,
+    T: FnMut(ListenKeyEvent) + 'static,
 {
     unsafe {
         GLOBAL_CALLBACK = Some(Box::new(callback));
@@ -207,15 +207,15 @@ unsafe extern "C" fn raw_callback(
 
 static mut LAST_FLAGS: CGEventFlags = CGEventFlags::CGEventFlagNull;
 
-unsafe fn convert_event(cg_event_type: CGEventType, cg_event: &CGEvent) -> Option<ListenEvent> {
+unsafe fn convert_event(cg_event_type: CGEventType, cg_event: &CGEvent) -> Option<ListenKeyEvent> {
     let code = cg_event
         .get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE)
         .try_into()
         .ok()?;
 
-    let event_type = match cg_event_type {
-        CGEventType::KeyDown => ListenEventType::KeyPress(key_from_code(code)),
-        CGEventType::KeyUp => ListenEventType::KeyRelease(key_from_code(code)),
+    let event = match cg_event_type {
+        CGEventType::KeyDown => ListenKeyEvent::KeyPress(key_from_code(code)),
+        CGEventType::KeyUp => ListenKeyEvent::KeyRelease(key_from_code(code)),
         CGEventType::FlagsChanged => {
             let new_flags = cg_event.get_flags();
 
@@ -223,16 +223,13 @@ unsafe fn convert_event(cg_event_type: CGEventType, cg_event: &CGEvent) -> Optio
             LAST_FLAGS = new_flags;
 
             if is_relese {
-                ListenEventType::KeyRelease(key_from_code(code))
+                ListenKeyEvent::KeyRelease(key_from_code(code))
             } else {
-                ListenEventType::KeyPress(key_from_code(code))
+                ListenKeyEvent::KeyPress(key_from_code(code))
             }
         }
         _ => return None,
     };
 
-    Some(ListenEvent {
-        event_type,
-        time: SystemTime::now(),
-    })
+    Some(event)
 }

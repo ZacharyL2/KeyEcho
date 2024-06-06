@@ -1,7 +1,5 @@
-use std::time::SystemTime;
-
 use serde::Deserialize;
-use strum::AsRefStr;
+use strum::{AsRefStr, Display};
 
 #[allow(dead_code)]
 #[derive(Debug, AsRefStr, Clone, Copy, Hash, Eq, PartialEq, Deserialize)]
@@ -115,19 +113,13 @@ pub enum Key {
 }
 
 #[derive(Debug)]
-pub enum ListenEventType {
+pub enum ListenKeyEvent {
     KeyPress(Key),
     KeyRelease(Key),
 }
 
-#[derive(Debug)]
-pub struct ListenEvent {
-    pub time: SystemTime,
-    pub event_type: ListenEventType,
-}
-
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Display)]
 pub enum ListenError {
     EventTap,
     LoopSource,
