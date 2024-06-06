@@ -1,6 +1,6 @@
 use std::{collections::HashSet, sync::Mutex};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 
 pub(super) mod decoder;
 pub(super) mod listen_key;
@@ -9,14 +9,20 @@ mod soundpack;
 pub use soundpack::{KeySoundpack, SoundOption};
 
 use crate::global_state::ArcKeySoundpack;
-use listen_key::{listen, Key, ListenEvent, ListenEventType};
+use listen_key::{listen, Key, ListenKeyEvent};
 
-pub fn run(soundpack: ArcKeySoundpack) -> Result<()> {
+pub fn run_keyecho(soundpack: ArcKeySoundpack) -> Result<()> {
     let (_stream, stream_handle) = rodio::OutputStream::try_default()?;
-
     let key_depressed = Mutex::new(HashSet::<Key>::new());
-    if let Err(error) = listen(move |evt: ListenEvent| match evt.event_type {
-        ListenEventType::KeyPress(k) => {
+
+    listen(move |evt| match evt {
+        ListenKeyEvent::KeyRelease(k) => {
+            key_depressed
+                .lock()
+                .ok()
+                .map(|mut depressed| depressed.remove(&k));
+        }
+        ListenKeyEvent::KeyPress(k) => {
             if key_depressed
                 .lock()
                 .ok()
@@ -41,15 +47,6 @@ pub fn run(soundpack: ArcKeySoundpack) -> Result<()> {
                     });
             }
         }
-        ListenEventType::KeyRelease(k) => {
-            key_depressed
-                .lock()
-                .ok()
-                .map(|mut depressed| depressed.remove(&k));
-        }
-    }) {
-        println!("error when listen: {:?}", error)
-    }
-
-    Ok(())
+    })
+    .map_err(|err| anyhow!(err))
 }

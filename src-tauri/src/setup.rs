@@ -3,12 +3,12 @@ use std::{
     thread,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tauri::{App, Manager};
 
 use crate::{
     features::{tray::create_tray_menu, window::show_dashboard},
-    keyecho::{run, KeySoundpack},
+    keyecho::{run_keyecho, KeySoundpack},
 };
 
 pub fn resolve_setup(app: &mut App) -> Result<()> {
@@ -30,11 +30,7 @@ pub fn resolve_setup(app: &mut App) -> Result<()> {
     let soundpack = Arc::new(Mutex::new(soundpack));
     app.manage(soundpack.clone());
 
-    thread::spawn(move || {
-        if let Err(err) = run(soundpack) {
-            println!("error while starting keyecho: {:?}", err)
-        };
-    });
+    thread::spawn(move || run_keyecho(soundpack).context("error while running keyecho"));
 
     Ok(())
 }
