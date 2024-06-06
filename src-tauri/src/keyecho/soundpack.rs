@@ -95,7 +95,7 @@ pub struct KeySoundpack {
     volume: f32,
     sounds: Vec<SoundOption>,
     current_sound: Option<KeySound>,
-    // todo use custom store install store plugin
+    // todo replace store plugin with custom store
     persistence: Store<Wry>,
 }
 

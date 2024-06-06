@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use tauri::{App, Manager};
 
 use crate::{
-    features::{tray::create_tray_menu, window::show_dashboard},
+    features::{tray::init_tray, window::show_dashboard},
     keyecho::{run_keyecho, KeySoundpack},
 };
 
@@ -17,12 +17,9 @@ pub fn resolve_setup(app: &mut App) -> Result<()> {
 
     let app_handle = app.handle();
 
-    app_handle
-        .tray_handle()
-        .set_menu(create_tray_menu(&app_handle))?;
+    init_tray(&app_handle)?;
 
     let soundpack = KeySoundpack::try_load(app_handle)?;
-
     if soundpack.current_sound().is_none() {
         show_dashboard(&app.app_handle())?;
     }
