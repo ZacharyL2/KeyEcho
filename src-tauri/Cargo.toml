@@ -1,7 +1,6 @@
 [package]
 name = "keyecho"
 version = "0.0.1"
-description = "Keystrokes produce delightful sounds"
 authors = ["Zachary"]
 edition = "2021"
 
