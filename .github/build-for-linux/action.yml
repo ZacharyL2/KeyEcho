@@ -1,15 +1,15 @@
-name: 'Build for Linux'
-description: 'building multiple versions for Linux'
+name: Build for Linux
+description: building multiple versions for Linux
 branding:
   icon: user-check
   color: gray-dark
 inputs:
   target:
     required: true
-    description: 'Rust Target'
+    description: Rust Target
 
 runs:
-  using: 'docker'
-  image: 'Dockerfile'
+  using: docker
+  image: Dockerfile
   args:
     - ${{ inputs.target }}
