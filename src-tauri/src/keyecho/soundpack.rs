@@ -74,17 +74,17 @@ impl KeySound {
             .get(&key)
             .cloned()
             .or_else(|| {
-                let [start_ms, duration_ms] = match key {
-                    Key::Unknown(_) => self.key_defines[&Key::KeyA],
-                    _ => self.key_defines[&key],
-                };
-
-                self.decoder
-                    .get_samples_buf(start_ms, duration_ms)
-                    .ok()
-                    .map(|buf| {
-                        self.key_cache.put(key, buf.clone());
-                        buf
+                self.key_defines
+                    .get(&key)
+                    .or_else(|| self.key_defines.get(&Key::KeyA))
+                    .and_then(|&[start_ms, duration_ms]| {
+                        self.decoder
+                            .get_samples_buf(start_ms, duration_ms)
+                            .ok()
+                            .map(|buf| {
+                                self.key_cache.put(key, buf.clone());
+                                buf
+                            })
                     })
             })
             .map(|buf| self.decoder.get_sound_source(buf))
