@@ -1,8 +1,9 @@
 [package]
 name = "keyecho"
+edition = "2021"
 version = "0.0.1"
 authors = ["Zachary"]
-edition = "2021"
+description = "KeyEcho"
 
 [build-dependencies]
 tauri-build = { version = "1", features = [] }
