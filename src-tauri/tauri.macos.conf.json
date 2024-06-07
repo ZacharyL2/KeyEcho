@@ -1,0 +1,8 @@
+{
+  "tauri": {
+    "systemTray": {
+      "iconPath": "icons/icon-mono.ico",
+      "iconAsTemplate": true
+    }
+  }
+}

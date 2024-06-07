@@ -1,27 +1,16 @@
+import path from 'node:path';
+
 import Vue from '@vitejs/plugin-vue';
-import UnoCSS from 'unocss/vite';
+import AutoPrefixer from 'autoprefixer';
+import Tailwind from 'tailwindcss';
 import AutoImport from 'unplugin-auto-import/vite';
-import { PrimeVueResolver } from 'unplugin-vue-components/resolvers';
-import Components from 'unplugin-vue-components/vite';
-import VueMacros from 'unplugin-vue-macros/vite';
 import { defineConfig } from 'vite';
-import TsConfigPaths from 'vite-tsconfig-paths';
 
 export default defineConfig(() => ({
   plugins: [
-    TsConfigPaths(),
+    Vue(),
 
-    VueMacros({
-      plugins: {
-        vue: Vue({
-          include: [/\.vue$/],
-        }),
-      },
-    }),
-
-    // https://github.com/antfu/unplugin-auto-import
     AutoImport({
-      vueTemplate: true,
       dts: 'src/types/auto-imports.d.ts',
       imports: [
         'vue',
@@ -29,22 +18,22 @@ export default defineConfig(() => ({
         {
           'vue-request': ['useRequest'],
         },
-        {
-          'primevue/usetoast': ['useToast'],
-          'primevue/useconfirm': ['useConfirm'],
-        },
       ],
-      resolvers: [PrimeVueResolver()],
+      vueTemplate: true,
     }),
-
-    // https://github.com/antfu/unplugin-vue-components
-    Components({
-      dts: 'src/types/components.d.ts',
-      resolvers: [PrimeVueResolver()],
-    }),
-
-    UnoCSS(),
   ],
+
+  css: {
+    postcss: {
+      plugins: [Tailwind(), AutoPrefixer()],
+    },
+  },
+
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, 'src'),
+    },
+  },
 
   clearScreen: false,
 
