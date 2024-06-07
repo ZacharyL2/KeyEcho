@@ -1,6 +1,8 @@
+[![img](https://beehiiv-images-production.s3.amazonaws.com/uploads/asset/file/72727833-89f0-4dd2-997a-8ffd45eaa8b2/Hello.png?t=1717771019)]()
+
 # KeyEcho
 
-> An essential software for keyboard workers
+> Listen to your keyboard typing and echo pleasant sounds
 
 - ⚡️ Minimal CPU and memory usage, instant keystroke response
 - 📦 Less than 5 MB in size, cross-platform compatibility
