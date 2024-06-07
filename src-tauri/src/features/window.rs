@@ -24,7 +24,8 @@ pub fn show_dashboard(app_handle: &AppHandle) -> Result<()> {
         WindowUrl::App("index.html".into()),
     )
     .title(window_label)
-    .min_inner_size(600.0, 520.0)
+    .min_inner_size(600.0, 480.0)
+    .inner_size(650.0, 520.0)
     .build()?;
 
     Ok(window.set_focus()?)
