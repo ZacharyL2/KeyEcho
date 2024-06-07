@@ -10,8 +10,7 @@
   },
   "tauri": {
     "systemTray": {
-      "iconPath": "icons/icon.ico",
-      "iconAsTemplate": true
+      "iconPath": "icons/icon.ico"
     },
     "updater": {
       "active": true,

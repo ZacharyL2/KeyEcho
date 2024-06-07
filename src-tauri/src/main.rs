@@ -23,8 +23,7 @@ fn main() {
             ])
             .config(
                 specta::ts::ExportConfig::default()
-                    .bigint(specta::ts::BigIntExportBehavior::String)
-                    .formatter(specta::ts::formatter::eslint),
+                    .bigint(specta::ts::BigIntExportBehavior::String),
             );
 
         #[cfg(debug_assertions)]
