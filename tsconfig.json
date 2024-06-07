@@ -1,19 +1,20 @@
 {
   "compilerOptions": {
-    "target": "ESNext",
     "module": "ESNext",
+    "target": "ESNext",
     "lib": ["DOM", "ESNext"],
-    "moduleResolution": "Bundler",
-    "newLine": "LF",
 
     "baseUrl": ".",
+    "moduleResolution": "Bundler",
     "paths": {
       "@/*": ["src/*"]
     },
-    "types": ["vite/client", "unplugin-vue-macros/macros-global"],
 
+    "newLine": "LF",
     "resolveJsonModule": true,
-    "allowJs": true,
+    "types": ["vite/client"],
+
+    "allowJs": false,
     "strict": true,
     "strictNullChecks": true,
     "noEmit": true,
@@ -23,5 +24,5 @@
     "isolatedModules": true,
     "skipLibCheck": true
   },
-  "include": ["src", "scripts", "vite.config.*", "uno.config.ts"]
+  "include": ["src", "scripts", "vite.config.*"]
 }

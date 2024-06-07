@@ -7,10 +7,6 @@ export default antfu(
     vue: true,
     stylistic: false,
     typescript: true,
-    unocss: {
-      strict: true,
-      attributify: true,
-    },
   },
 
   prettierConfig,
