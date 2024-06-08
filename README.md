@@ -8,9 +8,9 @@
 - 📦 Less than 5 MB in size, cross-platform compatibility
 - 🛠️ Customizable sounds to suit your preferences
 
-## Install
+[More about its performance comparison and under the hood.](https://webdeveloper.beehiiv.com/p/opensourced-keyecho-fastresponsive-keyboard-sounds-every-keystroke-using-tauri)
 
-> ⚠️ This is a project in development and may contain some bugs.
+## Install
 
 Supports Windows (64-bit/ARM64), macOS (Intel/Apple M1/M2), and Linux (64-bit/ARM64/ARMv7).
 
