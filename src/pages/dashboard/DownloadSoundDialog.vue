@@ -7,6 +7,7 @@ import {
   Dialog,
   DialogClose,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -81,26 +82,28 @@ const isExistedSound = (soundName: string) =>
         <DialogTitle>Download sound</DialogTitle>
       </DialogHeader>
 
-      <div v-for="s in onlineSounds" :key="s.name">
-        <div class="flex items-center justify-between border-b-[1px] p-2">
-          <span>
-            {{ s.name }}
-          </span>
+      <DialogDescription>
+        <div v-for="s in onlineSounds" :key="s.name">
+          <div class="flex items-center justify-between border-b-[1px] p-2">
+            <span>
+              {{ s.name }}
+            </span>
 
-          <Button
-            :variant="isExistedSound(s.name) ? 'outline' : 'default'"
-            :disabled="isDownloadingSound(s.download_url)"
-            @click="handleDownload(s.download_url)"
-          >
-            <Loader2
-              v-if="isDownloadingSound(s.download_url)"
-              class="w-4 h-4 mr-2 animate-spin"
-            />
+            <Button
+              :variant="isExistedSound(s.name) ? 'outline' : 'default'"
+              :disabled="isDownloadingSound(s.download_url)"
+              @click="handleDownload(s.download_url)"
+            >
+              <Loader2
+                v-if="isDownloadingSound(s.download_url)"
+                class="w-4 h-4 mr-2 animate-spin"
+              />
 
-            {{ isExistedSound(s.name) ? 'Redownload' : 'Download' }}
-          </Button>
+              {{ isExistedSound(s.name) ? 'Redownload' : 'Download' }}
+            </Button>
+          </div>
         </div>
-      </div>
+      </DialogDescription>
 
       <DialogFooter>
         <DialogClose asChild>
