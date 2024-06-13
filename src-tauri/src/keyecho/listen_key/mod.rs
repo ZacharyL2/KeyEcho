@@ -112,8 +112,8 @@ pub enum Key {
     Unknown(u32),
 }
 
-#[derive(Debug)]
-pub enum ListenKeyEvent {
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub enum KeyEvent {
     KeyPress(Key),
     KeyRelease(Key),
 }
