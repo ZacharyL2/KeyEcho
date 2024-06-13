@@ -7,7 +7,7 @@ use std::{
 
 use x11::{xlib, xrecord};
 
-use super::{Key, ListenError, ListenKeyEvent};
+use super::{Key, KeyEvent, ListenError};
 
 fn key_from_code(code: c_uint) -> Key {
     match code {
@@ -118,11 +118,11 @@ fn key_from_code(code: c_uint) -> Key {
     }
 }
 
-static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(ListenKeyEvent)>> = None;
+static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(KeyEvent)>> = None;
 
 pub fn listen<T>(callback: T) -> Result<(), ListenError>
 where
-    T: FnMut(ListenKeyEvent) + 'static,
+    T: FnMut(KeyEvent) + 'static,
 {
     unsafe {
         GLOBAL_CALLBACK = Some(Box::new(callback));
@@ -196,12 +196,12 @@ unsafe extern "C" fn raw_callback(
     }
 }
 
-fn convert_event(type_: c_int, code: c_uchar) -> Option<ListenKeyEvent> {
+fn convert_event(type_: c_int, code: c_uchar) -> Option<KeyEvent> {
     let key = key_from_code(code.into());
 
     let event = match type_ {
-        xlib::KeyPress => ListenKeyEvent::KeyPress(key),
-        xlib::KeyRelease => ListenKeyEvent::KeyRelease(key),
+        xlib::KeyPress => KeyEvent::KeyPress(key),
+        xlib::KeyRelease => KeyEvent::KeyRelease(key),
         _ => return None,
     };
 

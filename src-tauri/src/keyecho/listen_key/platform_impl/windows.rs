@@ -17,7 +17,7 @@ use winapi::{
     },
 };
 
-use super::{Key, ListenError, ListenKeyEvent};
+use super::{Key, KeyEvent, ListenError};
 
 // https://docs.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
 fn key_from_code(code: u32) -> Key {
@@ -130,11 +130,11 @@ fn key_from_code(code: u32) -> Key {
 }
 
 static mut HOOK: HHOOK = null_mut();
-static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(ListenKeyEvent)>> = None;
+static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(KeyEvent)>> = None;
 
 pub fn listen<T>(callback: T) -> Result<(), ListenError>
 where
-    T: FnMut(ListenKeyEvent) + 'static,
+    T: FnMut(KeyEvent) + 'static,
 {
     unsafe {
         GLOBAL_CALLBACK = Some(Box::new(callback));
@@ -166,7 +166,7 @@ unsafe extern "system" fn raw_callback(code: c_int, param: WPARAM, lpdata: LPARA
     CallNextHookEx(HOOK, code, param, lpdata)
 }
 
-fn convert_event(param: WPARAM, lpdata: LPARAM) -> Option<ListenKeyEvent> {
+fn convert_event(param: WPARAM, lpdata: LPARAM) -> Option<KeyEvent> {
     let code = unsafe {
         let kb = *(lpdata as *const KBDLLHOOKSTRUCT);
         kb.vkCode
@@ -175,8 +175,8 @@ fn convert_event(param: WPARAM, lpdata: LPARAM) -> Option<ListenKeyEvent> {
     let key = key_from_code(code);
 
     let event = match param as DWORD {
-        WM_KEYDOWN | WM_SYSKEYDOWN => ListenKeyEvent::KeyPress(key),
-        WM_KEYUP | WM_SYSKEYUP => ListenKeyEvent::KeyRelease(key),
+        WM_KEYDOWN | WM_SYSKEYDOWN => KeyEvent::KeyPress(key),
+        WM_KEYUP | WM_SYSKEYUP => KeyEvent::KeyRelease(key),
         _ => return None,
     };
 
