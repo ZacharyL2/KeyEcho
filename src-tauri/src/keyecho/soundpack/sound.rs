@@ -25,7 +25,7 @@ impl KeySound {
     pub fn new(sound_dir: &str) -> Result<Self> {
         let dir = PathBuf::from(sound_dir);
 
-        let decoder = SoundDecoder::new(dir.join("sound.wav"))?;
+        let decoder = SoundDecoder::new(dir.join("sound.ogg"))?;
         let file_config =
             serde_json::from_reader::<File, SoundFileConfig>(File::open(dir.join("config.json"))?)?;
 
