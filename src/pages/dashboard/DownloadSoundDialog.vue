@@ -32,10 +32,15 @@ const GithubSoundsSchema = array(
   }),
 );
 
-const { data: onlineSounds } = useRequest(async () => {
-  const data = await fetch(ONLINE_URL).then((res) => res.json());
-  return parseAsync(GithubSoundsSchema, data);
-});
+const { data: onlineSounds, loading: loadingOnlineSounds } = useRequest(
+  async () => {
+    const data = await fetch(ONLINE_URL).then((res) => res.json());
+    return parseAsync(GithubSoundsSchema, data);
+  },
+  {
+    loadingDelay: 200,
+  },
+);
 
 const { toast } = useToast();
 const downloadingUrl = ref('');
@@ -75,15 +80,21 @@ const isExistedSound = (soundName: string) =>
 <template>
   <Dialog>
     <DialogTrigger asChild>
-      <Button variant="link"> Download from online </Button>
+      <Button variant="link"> Download from Online </Button>
     </DialogTrigger>
     <DialogContent>
       <DialogHeader>
-        <DialogTitle>Download sound</DialogTitle>
+        <DialogTitle> Download Sound </DialogTitle>
       </DialogHeader>
 
-      <DialogDescription>
-        <div v-for="s in onlineSounds" :key="s.name">
+      <DialogDescription> Please select a sound to download </DialogDescription>
+
+      <div class="max-h-[42vh] overflow-y-auto px-2">
+        <div v-if="loadingOnlineSounds" class="h-20 grid place-items-center">
+          <Loader2 class="animate-spin size-8" />
+        </div>
+
+        <div v-for="s in onlineSounds" v-else :key="s.name">
           <div class="flex items-center justify-between border-b-[1px] p-2">
             <span>
               {{ s.name }}
@@ -103,7 +114,7 @@ const isExistedSound = (soundName: string) =>
             </Button>
           </div>
         </div>
-      </DialogDescription>
+      </div>
 
       <DialogFooter>
         <DialogClose asChild>

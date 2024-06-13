@@ -58,7 +58,7 @@ const existedSounds = computed(() => sounds.value?.map((s) => s.name));
 
     <Select v-model="selectedSound" @update:model-value="selectSound">
       <SelectTrigger class="w-80 mt-10 mb-2" :disabled="!existedSounds?.length">
-        <SelectValue placeholder="Please select a sound" />
+        <SelectValue placeholder="Select Your Sound" />
       </SelectTrigger>
       <SelectContent>
         <SelectGroup>
