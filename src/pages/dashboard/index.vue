@@ -7,6 +7,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { useToast } from '@/components/ui/toast';
 import { commands } from '@/services/bindings';
 
 import DownloadSoundDialog from './DownloadSoundDialog.vue';
@@ -27,13 +28,22 @@ const { data: selectedSound, refresh: refreshSelectedSound } = useRequest(
   },
 );
 
+const { toast } = useToast();
+
 const { run: selectSound } = useRequest(
   async (sound: string) => {
-    await commands.selectSound(sound);
+    const res = await commands.selectSound(sound);
+    if (res.status === 'error') {
+      toast({
+        variant: 'destructive',
+        description:
+          'Your selected sound needs an update. Please re-download it.',
+      });
+    }
   },
   {
     manual: true,
-    onSuccess: () => {
+    onAfter: () => {
       refreshSelectedSound();
     },
   },
