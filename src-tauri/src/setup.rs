@@ -20,7 +20,7 @@ pub fn resolve_setup(app: &mut App) -> Result<()> {
     init_tray(&app_handle)?;
 
     let soundpack = KeySoundpack::try_load(app_handle)?;
-    if soundpack.current_sound().is_none() {
+    if soundpack.selected_sound().is_none() {
         show_dashboard(&app.app_handle())?;
     }
 
