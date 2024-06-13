@@ -45,13 +45,13 @@ pub fn select_sound(soundpack: KeySoundpackState, sound: String) -> CmdResult<()
 #[tauri::command]
 #[specta::specta]
 pub fn get_selected_sound(soundpack: KeySoundpackState) -> CmdResult<Option<String>> {
-    with_soundpack(soundpack, |s| anyhow::Ok(s.current_sound()))
+    with_soundpack(soundpack, |s| anyhow::Ok(s.selected_sound()))
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn get_sounds(soundpack: KeySoundpackState) -> CmdResult<Vec<SoundOption>> {
-    with_soundpack(soundpack, |s| anyhow::Ok(s.list_sounds()))
+    with_soundpack(soundpack, |s| anyhow::Ok(s.sounds.clone()))
 }
 
 async fn download_sound_impl(dir: &PathBuf, url: &String) -> Result<()> {

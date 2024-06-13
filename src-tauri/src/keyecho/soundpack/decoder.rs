@@ -1,7 +1,6 @@
 use std::{fs::File, path::Path, time::Duration};
 
 use anyhow::{Context, Result};
-use rodio::buffer::SamplesBuffer;
 use symphonia::{
     core::{
         audio::SampleBuffer,
@@ -11,15 +10,15 @@ use symphonia::{
         probe::Hint,
         units::TimeBase,
     },
-    default::get_probe,
+    default::{get_codecs, get_probe},
 };
 
 pub struct SoundDecoder {
     decoder: Box<dyn Decoder>,
     format: Box<dyn FormatReader>,
-    rate: u32,
-    channels: u16,
     time_base: TimeBase,
+    pub(super) rate: u32,
+    pub(super) channels: u16,
 }
 
 impl SoundDecoder {
@@ -47,8 +46,7 @@ impl SoundDecoder {
 
         let format = probe.format;
         let track = format.default_track().context("no default track")?;
-        let decoder =
-            symphonia::default::get_codecs().make(&track.codec_params, &Default::default())?;
+        let decoder = get_codecs().make(&track.codec_params, &Default::default())?;
 
         let CodecParameters {
             sample_rate,
@@ -69,10 +67,6 @@ impl SoundDecoder {
             channels,
             time_base,
         })
-    }
-
-    pub fn get_sound_source(&self, samples_buffer: Vec<i16>) -> SamplesBuffer<i16> {
-        SamplesBuffer::new(self.channels, self.rate, samples_buffer)
     }
 
     pub fn get_samples_buf(&mut self, start_ms: u64, duration_ms: u64) -> Result<Vec<i16>> {
