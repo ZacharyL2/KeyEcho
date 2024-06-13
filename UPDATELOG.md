@@ -1,3 +1,19 @@
+## v0.0.3
+
+### Features
+
+- Added 8 audio options
+- Further optimized performance by using separate threads for key listening and sound playback
+- Adjusted logo to an appropriate size
+- UI display optimizations
+
+### Fixes
+
+- Fixed potential errors when switching default playback devices
+- Resolved default corruption issue on MacOS ARM
+
+---
+
 ## v0.0.2
 
 ### Features
