@@ -59,9 +59,9 @@ async fn download_sound_impl(dir: &PathBuf, url: &String) -> Result<()> {
         create_dir_all(dir)?;
     }
 
-    let content = reqwest::get(url).await.unwrap().bytes().await.unwrap();
+    let content = reqwest::get(url).await?.bytes().await?;
     let mut archive = tar::Archive::new(Cursor::new(content));
-    archive.unpack(dir).unwrap();
+    archive.unpack(dir)?;
 
     Ok(())
 }
