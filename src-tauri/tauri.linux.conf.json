@@ -1,0 +1,8 @@
+{
+  "tauri": {
+    "bundle": {
+      "identifier": "xyz.waveapps.keyecho",
+      "targets": ["deb", "appimage"]
+    }
+  }
+}
