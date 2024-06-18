@@ -3,6 +3,13 @@
     "systemTray": {
       "iconPath": "icons/icon-mono.ico",
       "iconAsTemplate": true
+    },
+    "bundle": {
+      "identifier": "xyz.waveapps.keyecho",
+      "targets": ["app", "dmg", "updater"],
+      "macOS": {
+        "signingIdentity": "-"
+      }
     }
   }
 }

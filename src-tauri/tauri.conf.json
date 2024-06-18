@@ -41,7 +41,6 @@
       "active": true,
       "category": "Productivity",
       "copyright": "GNU Affero General Public License v3.0",
-      "targets": ["updater", "nsis", "app", "dmg", "deb", "appimage"],
       "identifier": "xyz.waveapps.keyecho",
       "icon": [
         "icons/32x32.png",
@@ -49,10 +48,7 @@
         "icons/128x128@2x.png",
         "icons/icon.icns",
         "icons/icon.ico"
-      ],
-      "macOS": {
-        "signingIdentity": "-"
-      }
+      ]
     }
   }
 }
