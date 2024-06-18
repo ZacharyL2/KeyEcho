@@ -10,6 +10,7 @@ import {
 import { useToast } from '@/components/ui/toast';
 import { commands } from '@/services/bindings';
 
+import AutoLaunch from './AutoLaunch.vue';
 import DownloadSoundDialog from './DownloadSoundDialog.vue';
 
 const { data: sounds, refresh: refreshSounds } = useRequest(async () => {
@@ -53,25 +54,28 @@ const existedSounds = computed(() => sounds.value?.map((s) => s.name));
 </script>
 
 <template>
-  <div class="flex flex-col items-center p-12">
-    <div class="text-2xl">KeyEcho</div>
+  <div class="grid place-items-center">
+    <div class="flex flex-col items-center gap-2 p-12">
+      <div class="text-2xl">KeyEcho</div>
 
-    <Select v-model="selectedSound" @update:model-value="selectSound">
-      <SelectTrigger class="w-80 mt-10 mb-2" :disabled="!existedSounds?.length">
-        <SelectValue placeholder="Select Your Sound" />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectGroup>
-          <SelectItem v-for="s in sounds" :key="s.value" :value="s.value">
-            {{ s.name }}
-          </SelectItem>
-        </SelectGroup>
-      </SelectContent>
-    </Select>
+      <AutoLaunch class="self-end mt-8 mb-2" />
+      <Select v-model="selectedSound" @update:model-value="selectSound">
+        <SelectTrigger class="w-80" :disabled="!existedSounds?.length">
+          <SelectValue placeholder="Select Your Sound" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            <SelectItem v-for="s in sounds" :key="s.value" :value="s.value">
+              {{ s.name }}
+            </SelectItem>
+          </SelectGroup>
+        </SelectContent>
+      </Select>
 
-    <DownloadSoundDialog
-      :refreshSounds="refreshSounds"
-      :existedSounds="existedSounds"
-    />
+      <DownloadSoundDialog
+        :refreshSounds="refreshSounds"
+        :existedSounds="existedSounds"
+      />
+    </div>
   </div>
 </template>

@@ -36,7 +36,10 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(invoke_handler)
         .plugin(tauri_plugin_single_instance::init(|_, _, _| {}))
-        .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .system_tray(SystemTray::new())
         .on_system_tray_event(on_system_tray_event)
         .setup(|app| Ok(setup::resolve_setup(app)?))
