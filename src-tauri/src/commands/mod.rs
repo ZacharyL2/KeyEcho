@@ -85,10 +85,8 @@ pub async fn download_sound(
             .unwrap_or("Unknown")
             .to_string();
 
-        let dir = sounds_dir.join(&name).display().to_string();
-        with_soundpack(soundpack, |s| {
-            s.insert_sound(SoundOption { name, value: dir })
-        })?;
+        let value = sounds_dir.join(&name).display().to_string();
+        with_soundpack(soundpack, |s| s.insert_sound(SoundOption { name, value }))?;
     }
 
     Ok(())
