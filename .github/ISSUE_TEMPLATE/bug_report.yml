@@ -1,0 +1,59 @@
+name: 🐞 Bug Report
+title: '[bug] '
+description: Report a bug
+labels: ["bug"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## First of all
+        1. Please search for [existing issues](https://github.com/ZacharyL2/KeyEcho/issues?q=is%3Aissue) about this problem first.
+        2. Please be sure to fill in a concise and clear title for the issue so that others can quickly search.
+        3. Remember to follow our community guidelines and be friendly.
+  
+  - type: dropdown
+    attributes:
+      label: OS
+      options:
+        - Windows
+        - MacOS
+        - Linux
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: OS Version
+      description: Please provide your OS version.
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: A clear description of what the bug is. Include screenshots if applicable.
+      placeholder: Bug description
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: A link to a reproduction repo or steps to reproduce the behaviour.
+      placeholder: |
+        Please provide a minimal reproduction or steps to reproduce, see this guide https://stackoverflow.com/help/minimal-reproducible-example
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: A clear description of what you expected to happen.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add any other context about the problem here.
