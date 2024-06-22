@@ -2,7 +2,7 @@
   "tauri": {
     "bundle": {
       "identifier": "xyz.waveapps.keyecho",
-      "targets": ["deb", "rpm"]
+      "targets": ["deb"]
     }
   }
 }
