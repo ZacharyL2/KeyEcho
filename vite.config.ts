@@ -38,7 +38,7 @@ export default defineConfig(() => ({
   clearScreen: false,
 
   server: {
-    port: 1426,
+    port: 3426,
     strictPort: true,
     watch: {
       ignored: ['**/src-tauri/**'],
