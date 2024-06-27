@@ -11,11 +11,15 @@ import {
 } from '.';
 import { useToast } from './use-toast';
 
+const props = defineProps<{
+  duration?: number;
+}>();
+
 const { toasts } = useToast();
 </script>
 
 <template>
-  <ToastProvider>
+  <ToastProvider :duration="props.duration">
     <Toast v-for="toast in toasts" :key="toast.id" v-bind="toast">
       <div class="grid gap-1">
         <ToastTitle v-if="toast.title">
