@@ -1,3 +1,15 @@
+## v0.0.4
+
+### Features
+
+- Added auto launch option
+- Added volume control option
+- Added success/failure toasts for all options
+- Removed AppImage support
+- Optimized UI display
+
+---
+
 ## v0.0.3
 
 ### Features
