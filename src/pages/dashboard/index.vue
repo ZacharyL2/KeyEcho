@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { isUndefined } from 'lodash-es';
+
 import {
   Select,
   SelectContent,
@@ -7,6 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import Slider from '@/components/ui/slider/Slider.vue';
 import { useToast } from '@/components/ui/toast';
 import { commands } from '@/services/bindings';
 
@@ -50,12 +53,26 @@ const { run: selectSound } = useRequest(
   },
 );
 
+const { data: volume, refresh: refreshVolume } = useRequest(async () => {
+  const res = await commands.getVolume();
+  if (res.status === 'ok') {
+    return [Number(Math.round(res.data * 100))];
+  }
+});
+
+const updateVolume = useDebounceFn(async (nextVolume?: number) => {
+  if (!isUndefined(nextVolume)) {
+    await commands.updateVolume(nextVolume / 100);
+    refreshVolume();
+  }
+}, 400);
+
 const existedSounds = computed(() => sounds.value?.map((s) => s.name));
 </script>
 
 <template>
   <div class="grid place-items-center">
-    <div class="flex flex-col items-center gap-2 p-12">
+    <div class="flex flex-col gap-2 p-12">
       <div class="text-2xl">KeyEcho</div>
 
       <AutoLaunch class="self-end mt-8 mb-2" />
@@ -76,6 +93,19 @@ const existedSounds = computed(() => sounds.value?.map((s) => s.name));
         :refreshSounds="refreshSounds"
         :existedSounds="existedSounds"
       />
+
+      <Slider
+        v-model="volume"
+        :step="1"
+        :max="100"
+        @update:model-value="
+          (v) => {
+            updateVolume(v?.at(0));
+          }
+        "
+      />
+
+      {{ volume?.at(0) }}
     </div>
   </div>
 </template>
