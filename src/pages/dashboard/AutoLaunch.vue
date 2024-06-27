@@ -1,29 +1,31 @@
 <script setup lang="ts">
 import { disable, enable, isEnabled } from 'tauri-plugin-autostart-api';
 
-import { Checkbox } from '@/components/ui/checkbox';
+import { Switch } from '@/components/ui/switch';
+import { useToast } from '@/components/ui/toast';
 
-const { data: autoLaunchEnabled, refresh } = useRequest(isEnabled);
+const { toast } = useToast();
 
+const { data: autoLaunchEnabled, refreshAsync } = useRequest(isEnabled);
 async function handleChecked(checked: boolean) {
-  const handler = checked ? enable : disable;
-  await handler();
-  refresh();
+  const handlerFn = checked ? enable : disable;
+  const actionText = checked ? 'enabled' : 'disabled';
+
+  try {
+    await handlerFn();
+    await refreshAsync();
+
+    toast({
+      description: `Auto launch ${actionText} successfully.`,
+    });
+  } catch (err) {
+    toast({
+      description: `Auto launch ${actionText} failed. Reason: ${err}`,
+    });
+  }
 }
 </script>
 
 <template>
-  <div class="flex items-center space-x-2">
-    <Checkbox
-      id="autoLaunch"
-      :checked="autoLaunchEnabled"
-      @update:checked="handleChecked"
-    />
-    <label
-      for="autoLaunch"
-      class="text-sm leading-none peer-disabled:opacity-70 select-none"
-    >
-      Auto Launch
-    </label>
-  </div>
+  <Switch :checked="autoLaunchEnabled" @update:checked="handleChecked" />
 </template>
