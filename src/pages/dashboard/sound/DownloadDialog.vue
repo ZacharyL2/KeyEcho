@@ -13,11 +13,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/toast/use-toast';
 import { commands } from '@/services/bindings';
 
 const props = defineProps<{
-  existedSounds?: string[];
+  existedSoundNames?: string[];
   refreshSounds: () => void;
 }>();
 
@@ -50,6 +52,7 @@ const { run: handleDownload } = useRequest(
     const res = await commands.downloadSound(url);
     if (res.status === 'ok') {
       toast({
+        duration: 1000,
         description: 'Download successful',
       });
 
@@ -73,14 +76,17 @@ const { run: handleDownload } = useRequest(
 
 const isDownloadingSound = (soundUrl: string) =>
   soundUrl === downloadingUrl.value;
+
 const isExistedSound = (soundName: string) =>
-  props.existedSounds?.some((s) => soundName.startsWith(s));
+  props.existedSoundNames?.some((s) => soundName.startsWith(s));
 </script>
 
 <template>
   <Dialog>
     <DialogTrigger asChild>
-      <Button variant="link"> Download from Online </Button>
+      <Button variant="link" class="text-sm p-0 h-6">
+        Download from Online
+      </Button>
     </DialogTrigger>
     <DialogContent>
       <DialogHeader>
@@ -89,16 +95,14 @@ const isExistedSound = (soundName: string) =>
 
       <DialogDescription> Please select a sound to download </DialogDescription>
 
-      <div class="max-h-[42vh] overflow-y-auto px-2">
+      <ScrollArea class="max-h-[42vh] px-2">
         <div v-if="loadingOnlineSounds" class="h-20 grid place-items-center">
           <Loader2 class="animate-spin size-8" />
         </div>
 
         <div v-for="s in onlineSounds" v-else :key="s.name">
-          <div class="flex items-center justify-between border-b-[1px] p-2">
-            <span>
-              {{ s.name }}
-            </span>
+          <div class="flex items-center justify-between p-2">
+            <span>{{ s.name }}</span>
 
             <Button
               :variant="isExistedSound(s.name) ? 'outline' : 'default'"
@@ -113,8 +117,9 @@ const isExistedSound = (soundName: string) =>
               {{ isExistedSound(s.name) ? 'Redownload' : 'Download' }}
             </Button>
           </div>
+          <Separator />
         </div>
-      </div>
+      </ScrollArea>
 
       <DialogFooter>
         <DialogClose asChild>
