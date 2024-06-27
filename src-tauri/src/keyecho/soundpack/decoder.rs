@@ -83,7 +83,7 @@ impl SoundDecoder {
         let mut decoded_duration = 0u64;
         let mut samples_buffer = vec![];
 
-        while decoded_duration < (duration_ms) {
+        while decoded_duration < duration_ms {
             let packet = self.format.next_packet()?;
 
             let duration_time = self.time_base.calc_time(packet.dur);
