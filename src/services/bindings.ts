@@ -33,6 +33,14 @@ try {
     else return { status: "error", error: e  as any };
 }
 },
+async getVolume() : Promise<__Result__<number, string>> {
+try {
+    return { status: "ok", data: await TAURI_INVOKE("plugin:tauri-specta|get_volume") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async updateVolume(volume: number) : Promise<__Result__<null, string>> {
 try {
     return { status: "ok", data: await TAURI_INVOKE("plugin:tauri-specta|update_volume", { volume }) };
