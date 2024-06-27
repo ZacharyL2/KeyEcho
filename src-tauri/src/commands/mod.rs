@@ -38,6 +38,12 @@ pub fn update_volume(soundpack: KeySoundpackState, volume: f32) -> CmdResult<()>
 
 #[tauri::command]
 #[specta::specta]
+pub fn get_volume(soundpack: KeySoundpackState) -> CmdResult<f32> {
+    with_soundpack(soundpack, |s| anyhow::Ok(s.volume))
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn select_sound(soundpack: KeySoundpackState, sound: String) -> CmdResult<()> {
     with_soundpack(soundpack, |s| s.select_sound(sound))
 }

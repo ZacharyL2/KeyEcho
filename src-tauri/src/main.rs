@@ -9,7 +9,9 @@ mod global_state;
 mod keyecho;
 mod setup;
 
-use commands::{download_sound, get_selected_sound, get_sounds, select_sound, update_volume};
+use commands::{
+    download_sound, get_selected_sound, get_sounds, get_volume, select_sound, update_volume,
+};
 
 fn main() {
     let invoke_handler = {
@@ -19,6 +21,7 @@ fn main() {
                 get_sounds,
                 get_selected_sound,
                 select_sound,
+                get_volume,
                 update_volume,
             ])
             .config(
