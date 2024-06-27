@@ -46,7 +46,7 @@ impl KeySoundpack {
 
         let volume = persistence
             .get(ConfigKey::Volume)
-            .and_then(|val| val.as_u64().map(|v| v as f32))
+            .and_then(|val| val.as_f64().map(|v| v as f32))
             .unwrap_or(1.0);
 
         let current_sound = persistence
