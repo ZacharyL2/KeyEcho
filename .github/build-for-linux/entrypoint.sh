@@ -39,8 +39,4 @@ npm install -g pnpm
 pnpm config set package-manager-strict false
 
 pnpm install
-if [ "$INPUT_TARGET" = "x86_64-unknown-linux-gnu" ]; then
-    pnpm build --target $INPUT_TARGET
-else
-    pnpm build --target $INPUT_TARGET -b deb
-fi
+pnpm build --target $INPUT_TARGET
