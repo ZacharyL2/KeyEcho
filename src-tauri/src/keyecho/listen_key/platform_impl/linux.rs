@@ -2,7 +2,6 @@ use std::{
     ffi::CStr,
     os::raw::{c_char, c_int, c_uchar, c_uint},
     ptr::{addr_of_mut, null},
-    time::SystemTime,
 };
 
 use x11::{xlib, xrecord};
