@@ -57,9 +57,11 @@ const { run: selectSound } = useRequest(
   },
 );
 
-const existedSoundNames = computed(() => sounds.value?.map((s) => s.name));
+const existedSoundNames = computed(() =>
+  (sounds.value ?? []).map((s) => s.name),
+);
 const hasExistedSounds = computed(() =>
-  Boolean(existedSoundNames.value?.length),
+  Boolean(existedSoundNames.value.length),
 );
 </script>
 
