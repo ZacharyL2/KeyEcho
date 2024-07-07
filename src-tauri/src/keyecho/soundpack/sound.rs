@@ -45,24 +45,24 @@ impl KeySound {
             .cloned()
             .or_else(|| match key_evt {
                 KeyEvent::KeyRelease(_key) => None,
-                KeyEvent::KeyPress(key) => self
-                    .key_defines
-                    .get(&key)
-                    .or_else(|| self.key_defines.get(&Key::KeyA))
-                    .and_then(|&[start_ms, duration_ms]| {
-                        self.decoder
-                            .get_samples_buf(start_ms, duration_ms)
-                            .ok()
-                            .map(|buf| {
-                                let source = AudioSource::new(
-                                    buf,
-                                    self.decoder.channels as u16,
-                                    self.decoder.rate,
-                                );
-                                self.key_cache.put(key_evt, source.clone());
-                                source
-                            })
-                    }),
+                KeyEvent::KeyPress(key) => {
+                    self.key_defines
+                        .get(&key)
+                        .and_then(|&[start_ms, duration_ms]| {
+                            self.decoder
+                                .get_samples_buf(start_ms, duration_ms)
+                                .ok()
+                                .map(|buf| {
+                                    let source = AudioSource::new(
+                                        buf,
+                                        self.decoder.channels as u16,
+                                        self.decoder.rate,
+                                    );
+                                    self.key_cache.put(key_evt, source.clone());
+                                    source
+                                })
+                        })
+                }
             })
     }
 }
