@@ -75,7 +75,7 @@ const hasExistedSounds = computed(() =>
           "
         />
       </SelectTrigger>
-      <SelectContent>
+      <SelectContent class="max-h-[42vh]">
         <SelectGroup>
           <SelectItem v-for="s in sounds" :key="s.value" :value="s.value">
             {{ s.name }}
