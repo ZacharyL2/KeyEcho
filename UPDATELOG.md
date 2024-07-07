@@ -1,3 +1,17 @@
+## v0.0.5
+
+### Features
+
+- Add up to 10 audio options
+- Add RPM packaging
+- Optimize GUI display
+
+### Fixes
+
+- Remove default key mapping to 'A' key
+
+---
+
 ## v0.0.4
 
 ### Features
