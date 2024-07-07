@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import icon from '@/../src-tauri/icons/icon.ico';
+import icon from '@/../src-tauri/icons/Square71x71Logo.png';
 </script>
 
 <template>
