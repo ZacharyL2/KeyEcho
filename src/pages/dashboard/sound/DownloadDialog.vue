@@ -1,6 +1,15 @@
 <script setup lang="ts">
 import { Loader2 } from 'lucide-vue-next';
-import { array, literal, object, parseAsync, pipe, string, url } from 'valibot';
+import {
+  array,
+  type InferOutput,
+  literal,
+  object,
+  parseAsync,
+  pipe,
+  string,
+  url,
+} from 'valibot';
 
 import Button from '@/components/ui/button/Button.vue';
 import {
@@ -15,12 +24,12 @@ import {
 } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
-import { useToast } from '@/components/ui/toast/use-toast';
-import { commands } from '@/services/bindings';
 
-const props = defineProps<{
-  existedSoundNames?: string[];
+import DownloadButton from './DownloadButton.vue';
+
+defineProps<{
   refreshSounds: () => void;
+  existedSoundNames: string[];
 }>();
 
 const ONLINE_URL =
@@ -34,6 +43,8 @@ const GithubSoundsSchema = array(
   }),
 );
 
+export type GithubSound = InferOutput<typeof GithubSoundsSchema>[number];
+
 const { data: onlineSounds, loading: loadingOnlineSounds } = useRequest(
   async () => {
     const data = await fetch(ONLINE_URL).then((res) => res.json());
@@ -43,42 +54,6 @@ const { data: onlineSounds, loading: loadingOnlineSounds } = useRequest(
     loadingDelay: 200,
   },
 );
-
-const { toast } = useToast();
-const downloadingUrl = ref('');
-
-const { run: handleDownload } = useRequest(
-  async (url: string) => {
-    const res = await commands.downloadSound(url);
-    if (res.status === 'ok') {
-      toast({
-        duration: 1000,
-        description: 'Download successful',
-      });
-
-      props.refreshSounds();
-    } else {
-      toast({
-        description: 'Download failed',
-      });
-    }
-  },
-  {
-    manual: true,
-    onAfter: () => {
-      downloadingUrl.value = '';
-    },
-    onBefore: ([url]) => {
-      downloadingUrl.value = url;
-    },
-  },
-);
-
-const isDownloadingSound = (soundUrl: string) =>
-  soundUrl === downloadingUrl.value;
-
-const isExistedSound = (soundName: string) =>
-  props.existedSoundNames?.some((s) => soundName.startsWith(s));
 </script>
 
 <template>
@@ -104,18 +79,15 @@ const isExistedSound = (soundName: string) =>
           <div class="flex items-center justify-between p-2">
             <span>{{ s.name }}</span>
 
-            <Button
-              :variant="isExistedSound(s.name) ? 'outline' : 'default'"
-              :disabled="isDownloadingSound(s.download_url)"
-              @click="handleDownload(s.download_url)"
-            >
-              <Loader2
-                v-if="isDownloadingSound(s.download_url)"
-                class="w-4 h-4 mr-2 animate-spin"
-              />
-
-              {{ isExistedSound(s.name) ? 'Redownload' : 'Download' }}
-            </Button>
+            <DownloadButton
+              :sound="s"
+              :refreshSounds="refreshSounds"
+              :isExisted="
+                existedSoundNames.some((existedName) =>
+                  s.name.startsWith(existedName),
+                )
+              "
+            />
           </div>
           <Separator />
         </div>
