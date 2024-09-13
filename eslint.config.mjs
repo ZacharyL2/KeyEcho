@@ -14,6 +14,7 @@ export default antfu(
 
     typescript: {
       overrides: {
+        'perfectionist/sort-imports': 0,
         'ts/consistent-type-imports': [
           2,
           {
