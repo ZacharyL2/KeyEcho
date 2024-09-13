@@ -4,9 +4,31 @@ import simpleImportSort from 'eslint-plugin-simple-import-sort';
 
 export default antfu(
   {
-    vue: true,
     stylistic: false,
-    typescript: true,
+
+    vue: {
+      overrides: {
+        'vue/attribute-hyphenation': [2, 'never'],
+      },
+    },
+
+    typescript: {
+      overrides: {
+        'ts/consistent-type-imports': [
+          2,
+          {
+            fixStyle: 'inline-type-imports',
+          },
+        ],
+      },
+    },
+
+    javascript: {
+      overrides: {
+        'no-console': 1,
+        'unused-imports/no-unused-vars': 1,
+      },
+    },
   },
 
   prettierConfig,
@@ -20,20 +42,6 @@ export default antfu(
       'import/order': 0,
       'simple-import-sort/imports': 1,
       'simple-import-sort/exports': 1,
-    },
-  },
-
-  {
-    rules: {
-      'no-console': 1,
-      'unused-imports/no-unused-vars': 1,
-      'vue/attribute-hyphenation': [2, 'never'],
-      'ts/consistent-type-imports': [
-        2,
-        {
-          fixStyle: 'inline-type-imports',
-        },
-      ],
     },
   },
 
