@@ -78,7 +78,7 @@ const hasExistedSounds = computed(() =>
       <SelectContent class="max-h-[42vh]">
         <SelectGroup>
           <SelectItem v-for="s in sounds" :key="s.value" :value="s.value">
-            {{ s.name }}
+            <span class="whitespace-nowrap">{{ s.name }}</span>
           </SelectItem>
         </SelectGroup>
       </SelectContent>

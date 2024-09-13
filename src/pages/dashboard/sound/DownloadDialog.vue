@@ -77,7 +77,7 @@ const { data: onlineSounds, loading: loadingOnlineSounds } = useRequest(
 
         <div v-for="s in onlineSounds" v-else :key="s.name">
           <div class="flex items-center justify-between p-2">
-            <span>{{ s.name }}</span>
+            <span class="whitespace-nowrap">{{ s.name }}</span>
 
             <DownloadButton
               :sound="s"
