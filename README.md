@@ -1,40 +1,4 @@
-<meta content="website" property="og:type" />
-<meta content="https://github.com/ZacharyL2/KeyEcho" property="og:url" />
-<meta
-  content="KeyEcho: Listen to Mechanical Keyboard Sounds with Every Keystroke - It's Fast"
-  property="og:title"
-/>
-<meta
-  content="Listen to your keyboard typing and echo pleasant sounds"
-  property="og:description"
-/>
-<meta content="Open-Sourced KeyEcho" property="og:site_name" />
-<meta
-  content="https://i.imgur.com/ov3Nyai.png"
-  property="og:image"
-/>
-<meta content="1200" property="og:image:width" />
-<meta content="630" property="og:image:height" />
-<meta
-  content="Listen to your keyboard typing and echo pleasant sounds"
-  property="og:image:alt"
-/>
-<meta content="https://github.com/ZacharyL2/KeyEcho" name="twitter:url" />
-<meta
-  content="KeyEcho: Listen to Mechanical Keyboard Sounds with Every Keystroke - It's Fast"
-  name="twitter:title"
-/>
-<meta
-  content="Listen to your keyboard typing and echo pleasant sounds"
-  name="twitter:description"
-/>
-<meta
-  content="https://i.imgur.com/ov3Nyai.png"
-  name="twitter:image"
-/>
-<meta content="summary_large_image" name="twitter:card" />
-
-![KeyEcho Logo](https://i.imgur.com/ov3Nyai.png)
+![KeyEcho Logo](https://i.imgur.com/3hb0T1H.png)
 
 # KeyEcho
 
@@ -82,23 +46,16 @@ $ cd KeyEcho
 # Install dependencies
 $ pnpm install
 
-# Build the Rust backend
-$ cd src-tauri
-$ cargo build
-$ cd ..
-
-# Run the development server
+# Development
 $ pnpm dev
 
-# Build for production
+# Build
 $ pnpm build
 
 # To run the Rust backend separately:
-
 $ cd src-tauri
 $ cargo run
 
 # Then, from the root of the project, start the frontend:
-
-$ pnpm dev
+$ pnpm web:dev
 ```
