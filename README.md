@@ -16,6 +16,10 @@ Supports Windows (64-bit/ARM64), macOS (Intel/Apple M1/M2), and Linux (64-bit/AR
 
 Visit the [release page](https://github.com/ZacharyL2/KeyEcho/releases) to download the appropriate installation package.
 
+## 🎵 Custom Sounds
+
+Want to create your own keyboard sounds? Check out our [Custom Sounds Guide](CustomSounds.md) for detailed instructions on recording, processing, and adding your own sound packs to KeyEcho.
+
 ## 🧑‍💻 Development
 
 ### Prerequisites
