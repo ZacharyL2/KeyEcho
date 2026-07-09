@@ -1,15 +1,8 @@
 {
-  "tauri": {
-    "systemTray": {
-      "iconPath": "icons/icon-mono.ico",
-      "iconAsTemplate": true
-    },
-    "bundle": {
-      "identifier": "xyz.waveapps.keyecho",
-      "targets": ["app", "dmg", "updater"],
-      "macOS": {
-        "signingIdentity": "-"
-      }
+  "bundle": {
+    "targets": ["app", "dmg"],
+    "macOS": {
+      "signingIdentity": "-"
     }
   }
 }

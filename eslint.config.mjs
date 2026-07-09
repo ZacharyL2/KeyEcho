@@ -47,6 +47,13 @@ export default antfu(
   },
 
   {
+    files: ['pnpm-workspace.yaml'],
+    rules: {
+      'pnpm/yaml-enforce-settings': 0,
+    },
+  },
+
+  {
     ignores: ['**/src-tauri/**', '**/bindings.ts'],
   },
 );

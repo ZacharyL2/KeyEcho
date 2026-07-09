@@ -1,8 +1,17 @@
 {
-  "tauri": {
-    "bundle": {
-      "identifier": "xyz.waveapps.keyecho",
-      "targets": ["nsis", "updater"]
+  "bundle": {
+    "targets": ["nsis"],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

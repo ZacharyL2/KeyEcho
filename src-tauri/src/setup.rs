@@ -15,19 +15,24 @@ pub fn resolve_setup(app: &mut App) -> Result<()> {
     #[cfg(target_os = "macos")]
     app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-    let app_handle = app.handle();
+    let app_handle = app.handle().clone();
 
     init_tray(&app_handle)?;
 
-    let soundpack = KeySoundpack::try_load(app_handle)?;
+    let soundpack = KeySoundpack::try_load(app_handle.clone())?;
     if soundpack.selected_sound().is_none() {
-        show_dashboard(&app.app_handle())?;
+        show_dashboard(&app_handle)?;
     }
 
+    let playback = soundpack.playback();
     let soundpack = Arc::new(Mutex::new(soundpack));
     app.manage(soundpack.clone());
 
-    thread::spawn(move || run_keyecho(soundpack).context("error while running keyecho"));
+    thread::spawn(move || {
+        if let Err(error) = run_keyecho(playback).context("error while running keyecho") {
+            eprintln!("{error:#}");
+        }
+    });
 
     Ok(())
 }

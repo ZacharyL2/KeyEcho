@@ -1,8 +1,5 @@
 {
-  "tauri": {
-    "bundle": {
-      "identifier": "xyz.waveapps.keyecho",
-      "targets": ["deb", "rpm"]
-    }
+  "bundle": {
+    "targets": ["deb", "rpm", "appimage"]
   }
 }

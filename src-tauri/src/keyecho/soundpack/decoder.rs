@@ -1,21 +1,21 @@
-use std::{fs::File, path::Path, time::Duration};
+use std::{fs::File, path::Path};
 
 use anyhow::{Context, Result};
 use symphonia::{
     core::{
-        audio::SampleBuffer,
-        codecs::{CodecParameters, Decoder},
-        formats::{FormatOptions, FormatReader, SeekMode, SeekTo},
+        audio::GenericAudioBufferRef,
+        codecs::audio::AudioDecoder,
+        formats::{probe::Hint, FormatReader, SeekMode, SeekTo, TrackType},
         io::MediaSourceStream,
-        probe::Hint,
-        units::TimeBase,
+        units::{Duration as SymphoniaDuration, Time, TimeBase, Timestamp},
     },
     default::{get_codecs, get_probe},
 };
 
 pub struct SoundDecoder {
-    decoder: Box<dyn Decoder>,
+    decoder: Box<dyn AudioDecoder>,
     format: Box<dyn FormatReader>,
+    track_id: u32,
     time_base: TimeBase,
     pub(super) rate: u32,
     pub(super) channels: u16,
@@ -34,34 +34,32 @@ impl SoundDecoder {
             hint.with_extension(ext);
         }
 
-        let probe = get_probe().format(
-            &hint,
-            mss,
-            &FormatOptions {
-                // enable_gapless: true,
-                ..Default::default()
-            },
-            &Default::default(),
-        )?;
+        let format = get_probe().probe(&hint, mss, Default::default(), Default::default())?;
 
-        let format = probe.format;
-        let track = format.default_track().context("no default track")?;
-        let decoder = get_codecs().make(&track.codec_params, &Default::default())?;
+        let track = format
+            .default_track(TrackType::Audio)
+            .context("no default audio track")?;
+        let track_id = track.id;
+        let codec_params = track
+            .codec_params
+            .as_ref()
+            .and_then(|params| params.audio())
+            .context("no audio codec params")?;
+        let time_base = track.time_base.context("no time base")?;
+        let decoder = get_codecs().make_audio_decoder(codec_params, &Default::default())?;
 
-        let CodecParameters {
-            sample_rate,
-            channels,
-            time_base,
-            ..
-        } = decoder.codec_params();
-
-        let rate = sample_rate.context("no sample rate")?;
-        let channels = channels.map(|c| c.count() as u16).context("no channels")?;
-        let time_base = time_base.context("no time base")?;
+        let codec_params = decoder.codec_params();
+        let rate = codec_params.sample_rate.context("no sample rate")?;
+        let channels = codec_params
+            .channels
+            .as_ref()
+            .map(|channels| channels.count() as u16)
+            .context("no channels")?;
 
         Ok(SoundDecoder {
             decoder,
             format,
+            track_id,
 
             rate,
             channels,
@@ -69,12 +67,12 @@ impl SoundDecoder {
         })
     }
 
-    pub fn get_samples_buf(&mut self, start_ms: u64, duration_ms: u64) -> Result<Vec<i16>> {
+    pub fn get_samples_buf(&mut self, start_ms: u64, duration_ms: u64) -> Result<Vec<f32>> {
         self.format.seek(
             SeekMode::Accurate,
             SeekTo::Time {
                 track_id: None,
-                time: Duration::from_millis(start_ms).into(),
+                time: Time::from_millis_u64(start_ms),
             },
         )?;
 
@@ -84,20 +82,37 @@ impl SoundDecoder {
         let mut samples_buffer = vec![];
 
         while decoded_duration < duration_ms {
-            let packet = self.format.next_packet()?;
+            let Some(packet) = self.format.next_packet()? else {
+                break;
+            };
 
-            let duration_time = self.time_base.calc_time(packet.dur);
-            decoded_duration +=
-                ((duration_time.seconds as f64 + duration_time.frac) * 1000.) as u64;
+            if packet.track_id != self.track_id {
+                continue;
+            }
+
+            decoded_duration += duration_to_millis(self.time_base, packet.dur);
 
             let decoded = self.decoder.decode(&packet)?;
-            let mut sample_buffer =
-                SampleBuffer::<i16>::new(decoded.capacity() as u64, *decoded.spec());
-            sample_buffer.copy_interleaved_ref(decoded);
-
-            samples_buffer.extend_from_slice(sample_buffer.samples());
+            append_interleaved_samples(decoded, &mut samples_buffer);
         }
 
         Ok(samples_buffer)
     }
+}
+
+fn append_interleaved_samples(decoded: GenericAudioBufferRef<'_>, samples: &mut Vec<f32>) {
+    let start = samples.len();
+    samples.resize(start + decoded.samples_interleaved(), 0.0);
+    decoded.copy_to_slice_interleaved(&mut samples[start..]);
+}
+
+fn duration_to_millis(time_base: TimeBase, duration: SymphoniaDuration) -> u64 {
+    let Ok(ticks) = i64::try_from(duration.get()) else {
+        return u64::MAX;
+    };
+
+    time_base
+        .calc_time(Timestamp::new(ticks))
+        .map(|time| time.as_millis().max(0) as u64)
+        .unwrap_or(0)
 }
