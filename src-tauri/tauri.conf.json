@@ -13,7 +13,7 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": "default-src 'self' tauri: asset:; connect-src 'self' ipc: http://ipc.localhost http://localhost:3426 ws://localhost:3426 https://api.github.com https://raw.githubusercontent.com; img-src 'self' asset: data:; script-src 'self'; style-src 'self' 'unsafe-inline';"
+      "csp": "default-src 'self' tauri: asset:; connect-src 'self' ipc: http://ipc.localhost http://localhost:3426 ws://localhost:3426 https://keyecho.app https://www.keyecho.app https://api.github.com https://raw.githubusercontent.com; img-src 'self' asset: data:; script-src 'self'; style-src 'self' 'unsafe-inline';"
     }
   },
   "bundle": {
@@ -33,6 +33,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMxRjI2Njg0MjBENTUwRDQKUldUVVVOVWdoR2J5d1drWEJhWGl6UU9GNmlWUHJqUjJJRVpBbVZZeHh3YlF2MlRkNERHUjFEOUYK",
       "endpoints": [
+        "https://keyecho.app/releases/update.json",
         "https://github.com/ZacharyL2/KeyEcho/releases/download/updater/update.json"
       ]
     }

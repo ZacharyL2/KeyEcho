@@ -1,4 +1,7 @@
+import { isTauri } from '@tauri-apps/api/core';
 import { disable, enable, isEnabled } from '@tauri-apps/plugin-autostart';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { check } from '@tauri-apps/plugin-updater';
 import type { JSX } from 'solid-js';
 import {
   createEffect,
@@ -17,13 +20,17 @@ import iconUrl from '../src-tauri/icons/Square71x71Logo.png';
 import type { CommandResult, SoundOption } from './services/bindings';
 import { commands } from './services/bindings';
 
-const ONLINE_URL =
+const PACK_CATALOG_URL = 'https://keyecho.app/packs/index.json';
+const GITHUB_SOUND_FALLBACK_URL =
   'https://api.github.com/repos/ZacharyL2/KeyEcho/contents/src-tauri/resources';
 
 const APP_VERSION = '1.0.0';
 const APP_CAMPAIGN = `v${APP_VERSION.replace(/\./g, '_')}`;
 const KEYECHO_VOTE_URL = `https://keyecho.app/?source=keyecho_app&intent=sound_pack_vote&version=${APP_VERSION}&utm_source=keyecho_app&utm_medium=desktop&utm_campaign=${APP_CAMPAIGN}#queue`;
 const PROJECT_UPDATE_DISMISSED_KEY = `keyecho:v${APP_VERSION}:update-dismissed-session`;
+const APP_UPDATE_CHECK_DELAY_MS = 1200;
+
+let appUpdateCheckStarted = false;
 
 // Pack lists are remote (GitHub) and grow over time, so display names come
 // from token rules rather than a per-pack map: brand tokens that don't
@@ -56,7 +63,25 @@ const GithubSoundsSchema = array(
   }),
 );
 
+const PackCatalogSchema = object({
+  schemaVersion: literal(1),
+  packs: array(
+    object({
+      id: string(),
+      name: string(),
+      downloadUrl: pipe(string(), url()),
+    }),
+  ),
+});
+
 type GithubSound = InferOutput<typeof GithubSoundsSchema>[number];
+type PackCatalog = InferOutput<typeof PackCatalogSchema>;
+
+interface OnlineSound {
+  downloadUrl: string;
+  id: string;
+  name: string;
+}
 
 type ToastTone = 'default' | 'error';
 
@@ -91,6 +116,63 @@ async function openExternalUrl(url: string, notify: Notify) {
   }
 }
 
+async function fetchJson(url: string): Promise<unknown> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`${url} returned ${response.status}`);
+  }
+  return response.json();
+}
+
+function soundIdFromArchiveName(name: string): string {
+  return name.replace(/\.tar$/, '');
+}
+
+function mapPackCatalog(catalog: PackCatalog): OnlineSound[] {
+  return catalog.packs.map((pack) => ({
+    downloadUrl: pack.downloadUrl,
+    id: pack.id,
+    name: pack.name,
+  }));
+}
+
+function mapGithubSounds(sounds: GithubSound[]): OnlineSound[] {
+  return sounds.map((sound) => ({
+    downloadUrl: sound.download_url,
+    id: soundIdFromArchiveName(sound.name),
+    name: sound.name,
+  }));
+}
+
+async function loadOfficialOnlineSounds(): Promise<OnlineSound[]> {
+  return mapPackCatalog(
+    await parseAsync(PackCatalogSchema, await fetchJson(PACK_CATALOG_URL)),
+  );
+}
+
+async function loadFallbackOnlineSounds(): Promise<OnlineSound[]> {
+  return mapGithubSounds(
+    await parseAsync(
+      GithubSoundsSchema,
+      await fetchJson(GITHUB_SOUND_FALLBACK_URL),
+    ),
+  );
+}
+
+async function loadOnlineSounds(): Promise<OnlineSound[]> {
+  try {
+    return await loadOfficialOnlineSounds();
+  } catch (officialError) {
+    try {
+      return await loadFallbackOnlineSounds();
+    } catch (fallbackError) {
+      throw new Error(
+        `Pack catalog failed. Official source: ${officialError}; GitHub fallback: ${fallbackError}`,
+      );
+    }
+  }
+}
+
 function hasDismissedProjectUpdate(): boolean {
   try {
     return sessionStorage.getItem(PROJECT_UPDATE_DISMISSED_KEY) === 'true';
@@ -112,6 +194,58 @@ function forgetProjectUpdateDismissed() {
     sessionStorage.removeItem(PROJECT_UPDATE_DISMISSED_KEY);
   } catch {
     // Showing the update again is best-effort.
+  }
+}
+
+function createAppUpdateMessage(version: string, notes?: string): string {
+  const trimmedNotes = notes?.trim();
+
+  return [
+    `KeyEcho ${version} is available.`,
+    'Install it now and restart KeyEcho?',
+    trimmedNotes ? `\nRelease notes:\n${trimmedNotes}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+async function checkForAppUpdate(notify: Notify) {
+  if (appUpdateCheckStarted || !isTauri()) {
+    return;
+  }
+
+  appUpdateCheckStarted = true;
+
+  let update: Awaited<ReturnType<typeof check>>;
+  try {
+    update = await check();
+  } catch {
+    return;
+  }
+
+  if (!update) {
+    return;
+  }
+
+  // eslint-disable-next-line no-alert
+  const accepted = window.confirm(
+    createAppUpdateMessage(update.version, update.body),
+  );
+
+  if (!accepted) {
+    await update.close().catch(() => {});
+    return;
+  }
+
+  try {
+    notify(`Downloading KeyEcho ${update.version}...`);
+    await update.downloadAndInstall();
+    notify('Update installed. Restarting KeyEcho...');
+    await relaunch();
+  } catch (error) {
+    notify(`Update install failed. Reason: ${error}`, 'error');
+  } finally {
+    await update.close().catch(() => {});
   }
 }
 
@@ -379,7 +513,7 @@ function DownloadDialog(props: {
   onClose: () => void;
   onDownloaded: () => Promise<void>;
 }) {
-  const [onlineSounds, setOnlineSounds] = createSignal<GithubSound[]>([]);
+  const [onlineSounds, setOnlineSounds] = createSignal<OnlineSound[]>([]);
   const [loading, setLoading] = createSignal(false);
   const [loadingError, setLoadingError] = createSignal<string | null>(null);
   const [downloadingName, setDownloadingName] = createSignal<string | null>(
@@ -387,18 +521,13 @@ function DownloadDialog(props: {
   );
   let requestId = 0;
 
-  const loadOnlineSounds = async () => {
+  const loadOnlineSoundList = async () => {
     const currentRequestId = ++requestId;
     setLoading(true);
     setLoadingError(null);
 
     try {
-      const response = await fetch(ONLINE_URL);
-      if (!response.ok) {
-        throw new Error(`GitHub returned ${response.status}`);
-      }
-      const data = await response.json();
-      const parsed = await parseAsync(GithubSoundsSchema, data);
+      const parsed = await loadOnlineSounds();
       if (currentRequestId === requestId) {
         setOnlineSounds(parsed);
       }
@@ -413,11 +542,11 @@ function DownloadDialog(props: {
     }
   };
 
-  const handleDownload = async (sound: GithubSound) => {
+  const handleDownload = async (sound: OnlineSound) => {
     setDownloadingName(sound.name);
 
     try {
-      const result = await commands.downloadSound(sound.download_url);
+      const result = await commands.downloadSound(sound.downloadUrl);
       unwrapCommand(result);
       props.notify('Download successful.');
       await props.onDownloaded();
@@ -430,7 +559,7 @@ function DownloadDialog(props: {
 
   createEffect(() => {
     if (props.open) {
-      void loadOnlineSounds();
+      void loadOnlineSoundList();
     }
   });
 
@@ -469,7 +598,7 @@ function DownloadDialog(props: {
                   {(sound) => {
                     const isExisted = () =>
                       props.existedSoundNames.some((name) =>
-                        sound.name.startsWith(name),
+                        sound.id.startsWith(name),
                       );
                     const isDownloading = () =>
                       downloadingName() === sound.name;
@@ -575,6 +704,13 @@ export default function App() {
   const [projectUpdateVisible, setProjectUpdateVisible] = createSignal(
     !hasDismissedProjectUpdate(),
   );
+
+  onMount(() => {
+    window.setTimeout(
+      () => void checkForAppUpdate(notifier.notify),
+      APP_UPDATE_CHECK_DELAY_MS,
+    );
+  });
 
   const showProjectUpdate = () => {
     forgetProjectUpdateDismissed();

@@ -1,8 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
-import { getPublishPlatforms, resolvePlatforms } from './updater';
+import {
+  createUpdateManifest,
+  getPublishPlatforms,
+  resolvePlatforms,
+} from './updater';
 
 describe('updater asset mapping', () => {
+  it('keeps the updater manifest compatible with Tauri v1 and v2', () => {
+    expect(
+      createUpdateManifest('v1.0.0', 'Release notes', '2026-07-09T00:00:00Z'),
+    ).toMatchObject({
+      name: 'v1.0.0',
+      notes: 'Release notes',
+      pub_date: '2026-07-09T00:00:00Z',
+      version: 'v1.0.0',
+    });
+  });
+
   it('maps Windows updater artifacts', () => {
     expect(resolvePlatforms('KeyEcho_0.0.5_x64-setup.nsis.zip')).toEqual([
       'win64',

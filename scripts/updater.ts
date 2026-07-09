@@ -20,6 +20,42 @@ export interface UpdatePlatform {
 
 export type UpdatePlatforms = Record<string, UpdatePlatform>;
 
+export interface UpdateManifest {
+  name: string;
+  notes: string;
+  platforms: UpdatePlatforms;
+  pub_date: string;
+  version: string;
+}
+
+export function createUpdateManifest(
+  tag: string,
+  notes: string,
+  pubDate = new Date().toISOString(),
+): UpdateManifest {
+  return {
+    name: tag,
+    version: tag,
+    notes,
+    pub_date: pubDate,
+    platforms: {
+      win64: { signature: '', url: '' }, // compatible with older formats
+      linux: { signature: '', url: '' }, // compatible with older formats
+      darwin: { signature: '', url: '' }, // compatible with older formats
+      'windows-x86_64': { signature: '', url: '' },
+      'windows-aarch64': { signature: '', url: '' },
+
+      'darwin-x86_64': { signature: '', url: '' },
+      'darwin-intel': { signature: '', url: '' },
+      'darwin-aarch64': { signature: '', url: '' },
+
+      'linux-x86_64': { signature: '', url: '' },
+      'linux-aarch64': { signature: '', url: '' },
+      'linux-armv7': { signature: '', url: '' },
+    },
+  };
+}
+
 function resolveUpdateLog(tag: string) {
   const cwd = process.cwd();
   const filePath = path.join(cwd, CHANGELOG);
@@ -168,31 +204,10 @@ async function resolveUpdater() {
 
   console.log('release tag: ', latestRelease.tag_name);
 
-  const updateData: {
-    name: string;
-    notes: string;
-    platforms: UpdatePlatforms;
-    pub_date: string;
-  } = {
-    name: latestRelease.tag_name,
-    notes: resolveUpdateLog(latestRelease.tag_name),
-    pub_date: new Date().toISOString(),
-    platforms: {
-      win64: { signature: '', url: '' }, // compatible with older formats
-      linux: { signature: '', url: '' }, // compatible with older formats
-      darwin: { signature: '', url: '' }, // compatible with older formats
-      'windows-x86_64': { signature: '', url: '' },
-      'windows-aarch64': { signature: '', url: '' },
-
-      'darwin-x86_64': { signature: '', url: '' },
-      'darwin-intel': { signature: '', url: '' },
-      'darwin-aarch64': { signature: '', url: '' },
-
-      'linux-x86_64': { signature: '', url: '' },
-      'linux-aarch64': { signature: '', url: '' },
-      'linux-armv7': { signature: '', url: '' },
-    },
-  };
+  const updateData = createUpdateManifest(
+    latestRelease.tag_name,
+    resolveUpdateLog(latestRelease.tag_name),
+  );
 
   const promises = latestRelease.assets.map(async (asset) => {
     const { name, browser_download_url } = asset;

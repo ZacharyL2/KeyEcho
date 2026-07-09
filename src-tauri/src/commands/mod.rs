@@ -24,6 +24,7 @@ const MAX_SOUND_ARCHIVE_BYTES: usize = 10 * 1024 * 1024;
 const SOUND_DOWNLOAD_HOST: &str = "raw.githubusercontent.com";
 const SOUND_DOWNLOAD_OWNER: &str = "ZacharyL2";
 const SOUND_DOWNLOAD_REPO: &str = "KeyEcho";
+const SOUND_DOWNLOAD_PACKS_PATH: &str = "packs";
 const KEYECHO_APP_HOST: &str = "keyecho.app";
 const KEYECHO_APP_WWW_HOST: &str = "www.keyecho.app";
 const GITHUB_HOST: &str = "github.com";
@@ -71,11 +72,29 @@ fn validate_sound_download_url(url: &Url) -> Result<()> {
         url.scheme() == "https",
         "sound downloads must use HTTPS URLs"
     );
+
+    match url.host_str() {
+        Some(host) if host.eq_ignore_ascii_case(SOUND_DOWNLOAD_HOST) => {
+            validate_github_sound_download_url(url)?
+        }
+        Some(host)
+            if host.eq_ignore_ascii_case(KEYECHO_APP_HOST)
+                || host.eq_ignore_ascii_case(KEYECHO_APP_WWW_HOST) =>
+        {
+            validate_keyecho_sound_download_url(url)?
+        }
+        _ => bail!("sound downloads must come from an official KeyEcho source"),
+    }
+
     ensure!(
-        url.host_str() == Some(SOUND_DOWNLOAD_HOST),
-        "sound downloads must come from {SOUND_DOWNLOAD_HOST}"
+        sound_archive_filename(url).is_some_and(|filename| filename.ends_with(".tar")),
+        "sound downloads must be .tar archives"
     );
 
+    Ok(())
+}
+
+fn validate_github_sound_download_url(url: &Url) -> Result<()> {
     let mut segments = url
         .path_segments()
         .ok_or_else(|| anyhow!("sound download URL is missing a path"))?;
@@ -91,9 +110,17 @@ fn validate_sound_download_url(url: &Url) -> Result<()> {
             .is_some_and(|repo| repo.eq_ignore_ascii_case(SOUND_DOWNLOAD_REPO)),
         "sound downloads must come from the official repository"
     );
+
+    Ok(())
+}
+
+fn validate_keyecho_sound_download_url(url: &Url) -> Result<()> {
+    let mut segments = url
+        .path_segments()
+        .ok_or_else(|| anyhow!("sound download URL is missing a path"))?;
     ensure!(
-        sound_archive_filename(url).is_some_and(|filename| filename.ends_with(".tar")),
-        "sound downloads must be .tar archives"
+        segments.next() == Some(SOUND_DOWNLOAD_PACKS_PATH),
+        "sound downloads must come from the official pack path"
     );
 
     Ok(())
@@ -305,12 +332,25 @@ mod tests {
     }
 
     #[test]
+    fn sound_download_url_allows_keyecho_pack_archives() {
+        for raw_url in [
+            "https://keyecho.app/packs/nk-cream.tar",
+            "https://www.keyecho.app/packs/eg-oreo.tar",
+        ] {
+            let url = Url::parse(raw_url).expect("valid url");
+            validate_sound_download_url(&url).expect("official KeyEcho pack URL");
+        }
+    }
+
+    #[test]
     fn sound_download_url_rejects_untrusted_sources() {
         for raw_url in [
             "http://raw.githubusercontent.com/ZacharyL2/KeyEcho/master/src-tauri/resources/a.tar",
             "https://example.com/ZacharyL2/KeyEcho/master/src-tauri/resources/a.tar",
             "https://raw.githubusercontent.com/other/KeyEcho/master/src-tauri/resources/a.tar",
             "https://raw.githubusercontent.com/ZacharyL2/KeyEcho/master/src-tauri/resources/a.zip",
+            "https://keyecho.app/downloads/a.tar",
+            "https://keyecho.app/packs/a.zip",
         ] {
             let url = Url::parse(raw_url).expect("valid url");
             assert!(validate_sound_download_url(&url).is_err());
