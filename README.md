@@ -1,65 +1,90 @@
-![KeyEcho Logo](https://i.imgur.com/3hb0T1H.png)
+<p align="center">
+  <img src="./docs/assets/keyecho-hero.png" alt="KeyEcho — fast-responsive keyboard sounds with every keystroke. Open-source keyboard sound utility built with Tauri and Rust." />
+</p>
 
 # KeyEcho
 
-> Listen to your keyboard typing and echo pleasant sounds
+KeyEcho is a tiny open-source desktop app that plays pleasant keyboard sounds
+while you type. It is built with Tauri, Rust, and Solid, and is designed to stay
+local, fast, and easy to audit.
 
-- ⚡️ Minimal CPU and memory usage, instant keystroke response
-- 📦 Less than 5 MB in size, cross-platform compatibility
-- 🛠️ Customizable sounds to suit your preferences
+[Website](https://keyecho.app) · [Download](https://github.com/ZacharyL2/KeyEcho/releases/latest) · [Technical write-up](https://upweb.dev/posts/open-sourced-keyecho) · [Custom sounds](docs/custom-sounds.md)
 
-[More about its performance comparison and under the hood.](https://webdeveloper.beehiiv.com/p/opensourced-keyecho-fastresponsive-keyboard-sounds-every-keystroke-using-tauri)
+## Why
 
-## 🚀 Install
+- Local keyboard event handling for low-latency sound playback.
+- Cross-platform builds for Windows, macOS, and Linux.
+- Small native desktop footprint instead of a bundled browser runtime.
+- No account, cloud sync, or typing-content analytics.
+- Custom sound packs for people who want to tune the typing feel.
 
-Supports Windows (64-bit/ARM64), macOS (Intel/Apple M1/M2), and Linux (64-bit/ARM64/ARMv7).
+## Sound Packs
 
-Visit the [release page](https://github.com/ZacharyL2/KeyEcho/releases) to download the appropriate installation package.
+KeyEcho itself stays free and open source. Paid premium sound packs are planned
+as optional content that funds recording, tuning, and maintenance.
 
-## 🎵 Custom Sounds
+The current founding bundle is a one-time $9.99 early-supporter offer:
 
-Want to create your own keyboard sounds? Check out our [Custom Sounds Guide](CustomSounds.md) for detailed instructions on recording, processing, and adding your own sound packs to KeyEcho.
+- Includes the first batch of studio-recorded premium packs.
+- Includes any extra premium packs released during the founding period.
+- Gives founder vote priority for the next pack queue.
+- Is not a subscription.
+- Is not required to keep using KeyEcho.
+- Is not a lifetime pass for every future sound pack.
 
-## 🧑‍💻 Development
+You can vote for the next packs or back the founding bundle on
+[keyecho.app](https://keyecho.app).
+
+Want to create your own? See the [custom sounds guide](docs/custom-sounds.md)
+for recording, processing, and adding your own sound packs to KeyEcho.
+
+## Documentation
+
+- [Custom sounds guide](docs/custom-sounds.md)
+- [Performance notes](docs/performance.md)
+- [Changelog](CHANGELOG.md)
+
+## Install
+
+Download the latest build from the
+[GitHub Releases page](https://github.com/ZacharyL2/KeyEcho/releases/latest).
+
+Supported targets:
+
+- Windows x64 / ARM64
+- macOS Intel / Apple Silicon
+- Linux x64 / ARM64 / ARMv7
+
+KeyEcho needs the operating system permissions required for global keyboard
+event listening. It maps key events to local sound playback; it does not upload
+typed content.
+
+## Development
 
 ### Prerequisites
 
-#### Installing Rust and Cargo
+- [Rust and Cargo](https://www.rust-lang.org/tools/install)
+- [pnpm](https://pnpm.io/installation)
 
-Cargo is the package manager for Rust. If you don't have it installed, follow these steps:
-
-1. Visit the [Rust installation page](https://www.rust-lang.org/tools/install).
-2. Follow the instructions for your operating system to install Rust and Cargo.
-3. Verify the installation by running `cargo --version` in your terminal.
-
-#### Installing pnpm
-
-pnpm is a fast, disk space-efficient package manager for JavaScript. To install:
-
-1. Visit the [pnpm installation page](https://pnpm.io/installation).
-2. Choose the installation method that suits your operating system.
-3. Verify the installation by running `pnpm --version` in your terminal.
-
-### Building and Running the Project
+### Run Locally
 
 ```bash
-# Clone the repository
-$ git clone git@github.com:ZacharyL2/KeyEcho.git
-$ cd KeyEcho
-
-# Install dependencies
-$ pnpm install
-
-# Development
-$ pnpm dev
-
-# Build
-$ pnpm build
-
-# To run the Rust backend separately:
-$ cd src-tauri
-$ cargo run
-
-# Then, from the root of the project, start the frontend:
-$ pnpm web:dev
+git clone git@github.com:ZacharyL2/KeyEcho.git
+cd KeyEcho
+pnpm install
+pnpm dev
 ```
+
+### Useful Commands
+
+```bash
+pnpm web:dev       # Vite frontend only
+pnpm web:build     # Type-check and build the frontend
+pnpm test:rust     # Rust tests
+pnpm test          # Rust tests, web tests, and frontend build
+pnpm build         # Tauri production build
+```
+
+## License
+
+KeyEcho is released under the [AGPL-3.0 license](./LICENSE).
