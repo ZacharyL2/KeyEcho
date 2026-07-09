@@ -613,9 +613,8 @@ function ProjectUpdateCard(props: { notify: Notify; onDismiss: () => void }) {
           KeyEcho is back — shape its first packs
         </h3>
         <p class="project-update-copy">
-          Rebuilt on Tauri 2 with signed builds for every platform — still free
-          and open source. Studio-recorded packs are next: your vote decides
-          what gets recorded first.
+          Rebuilt on Tauri 2, still free and open source. Studio-recorded packs
+          are next: your vote decides what gets recorded first.
         </p>
       </div>
 

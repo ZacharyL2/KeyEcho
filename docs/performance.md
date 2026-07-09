@@ -1,168 +1,122 @@
 # Performance Notes
 
-## 2026-06-24 Audio Hot Path Optimization
+## v1.0 Audio Path
 
-Measured against the currently selected local soundpack:
+KeyEcho 1.0 makes key playback more predictable by moving expensive work out of
+the key-press path.
 
-- Soundpack: `cherrymx-black-abs`
-- Config path: `%APPDATA%\xyz.waveapps.keyecho\sounds\cherrymx-black-abs\config.json`
-- Defined keys: 104
-- Unique audio slices after `[start_ms, duration_ms]` dedupe: 86
-- Duplicate key slices removed from decoded storage: 18
+When a sound pack is selected, KeyEcho now:
 
-These numbers are deterministic reductions from the current soundpack config and audio source
-representation, not hardware timing benchmarks.
+- validates the archive and sound-pack budget,
+- deduplicates identical `[start_ms, duration_ms]` slices,
+- decodes each unique OGG slice once,
+- stores decoded samples in shared `Arc<[f32]>` buffers.
 
-### Release Baseline Timing
+When a key is pressed, playback now:
 
-Reference timings were measured on the same machine with release builds:
+- sends one event to a bounded audio queue,
+- loads the current sound without a global sound-pack mutex,
+- clones an `Arc<[f32]>` handle instead of a sample buffer,
+- reads volume through an atomic value.
+
+The key-press path no longer performs:
+
+- OGG seek/decode,
+- sample-buffer copies,
+- global sound-pack mutex locks,
+- key-release playback messages,
+- unbounded queue growth.
+
+Tradeoff: selected packs use more memory up front. Downloaded and custom packs
+are rejected before predecode if their estimated decoded size exceeds 10 MiB at
+48 kHz stereo f32.
+
+## Reference Pack
+
+The numbers below use the bundled `cherrymx-black-abs` pack.
+
+| Metric                                         |  Value |
+| ---------------------------------------------- | -----: |
+| Defined keys                                   |    104 |
+| Unique audio slices after dedupe               |     86 |
+| Duplicate key slices removed from sample store |     18 |
+| Decoded sample storage saved by dedupe         | 17.82% |
+
+These pack counts come from the sound-pack config. The timings below are release
+microbenchmarks, not end-to-end speaker latency measurements.
+
+## Reference Timings
+
+Measured with release builds on the same machine:
 
 ```text
 cargo test --release --manifest-path src-tauri\Cargo.toml reference_timing -- --ignored --nocapture
 ```
 
-Baseline: local `v0.0.5` release tag (`fee5596925a6403b2bf84cd60cc271534c2d674c`).
+Baseline: local `v0.0.5` release tag
+`fee5596925a6403b2bf84cd60cc271534c2d674c`.
 
-| Path                                              | v0.0.5 release | Current branch | Speedup | Latency reduction |
-| ------------------------------------------------- | -------------: | -------------: | ------: | ----------------: |
-| Cached audio lookup, avg `cherrymx-black-abs` key |   594.14 ns/op |    43.25 ns/op |   13.7x |             92.7% |
-| Cached audio lookup, max `cherrymx-black-abs` key |   916.82 ns/op |    43.13 ns/op |   21.3x |             95.3% |
-| Press/release gate CPU only                       |   57.01 ns/tap |   53.90 ns/tap |   1.06x |              5.5% |
+| Measurement                                  | v0.0.5 release                      | v1.0 branch                            | Change                         |
+| -------------------------------------------- | ----------------------------------- | -------------------------------------- | ------------------------------ |
+| Cached lookup, average-size slice (`194 ms`) | `1184.07 ns/op`, `66.84 KiB` copied | `43.50 ns/op`, `0` sample bytes copied | `27.2x` faster                 |
+| Cached lookup, largest slice (`287 ms`)      | `1638.57 ns/op`, `98.88 KiB` copied | `43.10 ns/op`, `0` sample bytes copied | `38.0x` faster                 |
+| Press/release gate, CPU only                 | `58.82 ns/tap`, 2 playback messages | `54.69 ns/tap`, 1 playback message     | similar CPU, half the messages |
 
-The lookup benchmark compares the release hot path's cached `Mutex + LruCache + Vec<i16>` clone
-against the current hot path's `ArcSwap + Arc<[f32]>` clone. It does not include actual audio device
-I/O, which depends on hardware and OS scheduling.
+The lookup benchmark compares the old cached model's mutex-protected owned
+sample-buffer clone with the v1.0 shared-buffer path. It intentionally excludes
+audio device I/O, which depends on OS scheduling and hardware.
 
-The gate benchmark intentionally measures CPU only. The larger behavioral change is that a normal
-tap now sends 1 audio-thread message instead of 2.
+## Memory Budget
 
-### Decoded Sample Memory
+`cherrymx-black-abs` decoded sample storage after slice dedupe:
 
-The decoded sample memory estimate is:
+| Format          | Before dedupe | After dedupe |     Saved |
+| --------------- | ------------: | -----------: | --------: |
+| 44.1 kHz mono   |     3.385 MiB |    2.782 MiB | 0.603 MiB |
+| 44.1 kHz stereo |     6.771 MiB |    5.564 MiB | 1.207 MiB |
+| 48 kHz mono     |     3.685 MiB |    3.028 MiB | 0.657 MiB |
+| 48 kHz stereo   |     7.370 MiB |    6.056 MiB | 1.313 MiB |
 
-```text
-duration_seconds * sample_rate * channel_count * 4 bytes
-```
+Bundled and downloaded packs are checked against these limits before predecode:
 
-For this soundpack:
+| Budget                                      |        Limit |
+| ------------------------------------------- | -----------: |
+| Defined keys                                |     `<= 104` |
+| Unique `[start_ms, duration_ms]` slices     |     `<= 104` |
+| Unique predecoded duration                  |   `<= 18.5s` |
+| Estimated decoded memory, 48 kHz stereo f32 |  `<= 10 MiB` |
+| Estimated largest single-key buffer         | `<= 512 KiB` |
 
-| Format          | Before slice dedupe | After slice dedupe |     Saved |
-| --------------- | ------------------: | -----------------: | --------: |
-| 44.1 kHz mono   |           3.385 MiB |          2.782 MiB | 0.603 MiB |
-| 44.1 kHz stereo |           6.771 MiB |          5.564 MiB | 1.207 MiB |
-| 48 kHz mono     |           3.685 MiB |          3.028 MiB | 0.657 MiB |
-| 48 kHz stereo   |           7.370 MiB |          6.056 MiB | 1.313 MiB |
+Current maximums across bundled packs:
 
-Slice dedupe reduces decoded sample storage by 17.82% for this soundpack.
+| Metric                                       |                       Current max |
+| -------------------------------------------- | --------------------------------: |
+| Defined keys                                 |                             `104` |
+| Unique slices                                |                 `103` (`eg-oreo`) |
+| Unique predecoded duration                   |            `17.884s` (`nk-cream`) |
+| Decoded memory, 48 kHz stereo f32            |           `6.55 MiB` (`nk-cream`) |
+| Largest single-key buffer, 48 kHz stereo f32 | `447.75 KiB` (`cherrymx-red-pbt`) |
 
-### Per-Key Playback Allocation
+Compared with `v0.0.5`, v1.0 uses more memory immediately after selecting a pack
+because it predecodes unique slices up front. That tradeoff removes decode and
+sample-copy work from key playback.
 
-Before shared sample buffers, each playback cloned the full `Vec<f32>` for the key sound.
-For this soundpack, that removed clone was:
+## Audio Device Routing
 
-| Format          | Average removed copy per playback | Maximum removed copy per playback |
-| --------------- | --------------------------------: | --------------------------------: |
-| 44.1 kHz mono   |                         33.33 KiB |                         49.44 KiB |
-| 44.1 kHz stereo |                         66.67 KiB |                         98.88 KiB |
-| 48 kHz mono     |                         36.28 KiB |                         53.81 KiB |
-| 48 kHz stereo   |                         72.56 KiB |                        107.62 KiB |
+Default output-device following is delegated to `cpal 0.18.1` through the
+`rodio` Git dependency. Key playback does not poll devices on the hot path.
 
-Current playback clones only an `Arc<[f32]>` handle plus small source metadata.
+## Verification
 
-Compared with `v0.0.5`, this removes the release hot path's cached `Vec<i16>` copy:
-
-| Key size                         | v0.0.5 copied per playback | Current copied per playback |
-| -------------------------------- | -------------------------: | --------------------------: |
-| Average `cherrymx-black-abs` key |                  33.42 KiB |              0 sample bytes |
-| Largest `cherrymx-black-abs` key |                  49.44 KiB |              0 sample bytes |
-
-### Current Playback Hot Path
-
-For a key press that should play sound, the hot path now performs:
-
-- One bounded `crossbeam-channel` `try_send` from the key listener and one receive on the audio
-  thread.
-- One `ArcSwapOption` load for the current sound.
-- One `Arc<[f32]>` handle clone for the predecoded sample storage.
-- One atomic `u32` load for volume.
-
-The hot path does not perform:
-
-- OGG seek/decode.
-- `Vec<f32>` sample clone.
-- Global soundpack `Mutex` lock.
-- Key-release playback message.
-- Unbounded queue growth.
-
-The audio event queue capacity is fixed at 256 events. If the audio thread is overloaded, new key
-sounds are dropped instead of allowing memory and latency to grow without a bound.
-
-### Event Path
-
-For a normal key tap:
-
-- Audio-thread messages reduced from 2 to 1, because `KeyRelease` no longer enters playback.
-- Pressed-key state mutex acquisitions reduced from 2 to 0; the listener owns the `HashSet` directly.
-- Global soundpack mutex acquisitions on the playback path reduced from 2 to 0.
-- Runtime OGG seek/decode on key press was removed; all slices are decoded when the soundpack is selected.
-
-### Bundled Soundpack Budgets
-
-The Rust test suite reads every `src-tauri/resources/*.tar` soundpack config and enforces these
-budgets:
-
-- Defined keys: `<= 104`
-- Unique `[start_ms, duration_ms]` slices: `<= 104`
-- Unique predecoded duration: `<= 18.5s`
-- Estimated decoded sample memory at 48 kHz stereo f32: `<= 10 MiB`
-- Estimated largest single-key sample buffer at 48 kHz stereo f32: `<= 512 KiB`
-
-Current maximums across bundled soundpacks:
-
-| Metric                                       |                     Current max |
-| -------------------------------------------- | ------------------------------: |
-| Defined keys                                 |                             104 |
-| Unique slices                                |                 103 (`eg-oreo`) |
-| Unique predecoded duration                   |            17.884s (`nk-cream`) |
-| Decoded sample memory, 48 kHz stereo f32     |           6.55 MiB (`nk-cream`) |
-| Largest single-key buffer, 48 kHz stereo f32 | 447.75 KiB (`cherrymx-red-pbt`) |
-
-Runtime soundpack loading uses the same hard budget of 10 MiB estimated at 48 kHz stereo f32. The
-estimate is computed from unique `[start_ms, duration_ms]` slices before decoding. Oversized
-downloaded or custom soundpacks are rejected before predecode, so they cannot push the playback path
-into unexpectedly high memory use.
-
-Memory tradeoff against `v0.0.5`: the release build used lazy LRU caching, so initial memory was
-lower. For `cherrymx-black-abs`, the old LRU-50 cache is about 1.63 MiB for 50 average keys and
-1.79 MiB for the largest 50 keys at 44.1 kHz stereo i16. The current branch predecodes unique slices
-up front, about 5.56 MiB at 44.1 kHz stereo f32 for this pack, to remove decode/copy work from the
-key press path and keep latency stable.
-
-### Audio Device Routing
-
-Default output device following is delegated to `cpal 0.18.1` through the `rodio` Git dependency.
-No polling is performed on the key playback hot path.
-
-### Verification
+Last full verification for the v1.0 branch:
 
 - `rtk pnpm test`
-  - Rust unit tests: 15 passed
-  - Rust reference benchmarks: 2 ignored by default
-  - Vitest unit tests: 4 passed
-  - Frontend typecheck and Vite production build: passed
-- `rtk pnpm run bench:audio`: 2 release reference benchmarks passed
+  - Rust unit tests: 25 passed
+  - Vitest unit tests: 11 passed
+  - frontend typecheck and production build: passed
+- `rtk pnpm run bench:audio`: 2 ignored-by-default reference benchmarks passed
 - `rtk cargo check --manifest-path src-tauri\Cargo.toml`: passed
-- `rtk pnpm outdated`: all packages up-to-date
 
-The Rust tests cover:
-
-- `AudioSource` exact sample counts, duration metadata, and clone-time shared sample storage.
-- Bounded audio event queue capacity.
-- Press/release gating so repeated keydown events do not enqueue extra playback.
-- Runtime soundpack memory budget enforcement at 10 MiB.
-- Soundpack predecode dedupe so identical `[start_ms, duration_ms]` slices decode once and share
-  sample storage while each playback gets an independent cursor.
-- Lock-free playback state updates for current sound and volume.
-- Bundled soundpack memory budgets.
-
-The Vitest tests cover Tauri command binding success/error wrapping and argument forwarding.
+The Rust tests cover shared sample storage, bounded queue capacity, press/release
+gating, runtime sound-pack memory limits, slice dedupe, lock-free playback state
+updates, and bundled sound-pack budgets.

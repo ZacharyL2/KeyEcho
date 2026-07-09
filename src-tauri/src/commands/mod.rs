@@ -2,13 +2,13 @@ use std::{
     fs::create_dir_all,
     io::Cursor,
     path::{Component, Path},
-    process::Command,
 };
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use reqwest::Url;
 use tar::EntryType;
 use tauri::{AppHandle, Manager};
+use tauri_plugin_opener::OpenerExt;
 
 use crate::{
     global_state::KeySoundpackState,
@@ -170,19 +170,10 @@ fn validate_external_url(url: &Url) -> Result<()> {
     Ok(())
 }
 
-fn open_url_with_system(url: &str) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    let status = Command::new("open").arg(url).status();
-
-    #[cfg(target_os = "windows")]
-    let status = Command::new("cmd").args(["/C", "start", "", url]).status();
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let status = Command::new("xdg-open").arg(url).status();
-
-    let status = status.context("failed to open external link")?;
-    ensure!(status.success(), "external link opener failed");
-
+fn open_url_with_system(app: &AppHandle, url: &str) -> Result<()> {
+    app.opener()
+        .open_url(url, None::<&str>)
+        .context("failed to open external link")?;
     Ok(())
 }
 
@@ -295,10 +286,10 @@ pub async fn download_sound(
 }
 
 #[tauri::command]
-pub fn open_external_url(url: String) -> CmdResult<()> {
+pub fn open_external_url(app: AppHandle, url: String) -> CmdResult<()> {
     let parsed = Url::parse(&url).context("invalid external URL")?;
     validate_external_url(&parsed)?;
-    open_url_with_system(parsed.as_str())?;
+    open_url_with_system(&app, parsed.as_str())?;
 
     Ok(())
 }
@@ -323,7 +314,7 @@ mod tests {
     #[test]
     fn sound_download_url_allows_official_raw_archives() {
         let url = Url::parse(
-            "https://raw.githubusercontent.com/ZacharyL2/KeyEcho/master/src-tauri/resources/cherrymx-blue-abs.tar",
+            "https://raw.githubusercontent.com/ZacharyL2/KeyEcho/main/src-tauri/resources/cherrymx-blue-abs.tar",
         )
         .expect("valid url");
 
@@ -345,10 +336,10 @@ mod tests {
     #[test]
     fn sound_download_url_rejects_untrusted_sources() {
         for raw_url in [
-            "http://raw.githubusercontent.com/ZacharyL2/KeyEcho/master/src-tauri/resources/a.tar",
-            "https://example.com/ZacharyL2/KeyEcho/master/src-tauri/resources/a.tar",
-            "https://raw.githubusercontent.com/other/KeyEcho/master/src-tauri/resources/a.tar",
-            "https://raw.githubusercontent.com/ZacharyL2/KeyEcho/master/src-tauri/resources/a.zip",
+            "http://raw.githubusercontent.com/ZacharyL2/KeyEcho/main/src-tauri/resources/a.tar",
+            "https://example.com/ZacharyL2/KeyEcho/main/src-tauri/resources/a.tar",
+            "https://raw.githubusercontent.com/other/KeyEcho/main/src-tauri/resources/a.tar",
+            "https://raw.githubusercontent.com/ZacharyL2/KeyEcho/main/src-tauri/resources/a.zip",
             "https://keyecho.app/downloads/a.tar",
             "https://keyecho.app/packs/a.zip",
         ] {
@@ -360,9 +351,10 @@ mod tests {
     #[test]
     fn external_url_allows_keyecho_and_official_github_links() {
         for raw_url in [
+            "https://keyecho.app/?source=keyecho_app#queue",
             "https://keyecho.app/?source=keyecho_app&intent=founding_bundle&version=1.0.0",
             "https://www.keyecho.app/?source=keyecho_app&intent=sound_pack_vote",
-            "https://github.com/ZacharyL2/KeyEcho/blob/master/docs/custom-sounds.md",
+            "https://github.com/ZacharyL2/KeyEcho/blob/main/docs/custom-sounds.md",
         ] {
             let url = Url::parse(raw_url).expect("valid url");
             validate_external_url(&url).expect("allowed external URL");

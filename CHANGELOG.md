@@ -21,11 +21,11 @@
 - Send only key press events to the audio thread, avoiding release-event playback work
 - Bound the audio event queue to 256 events so overloaded playback drops new events instead of growing memory and latency without limit
 - Enforce a 10 MiB decoded sample memory budget for downloaded and custom sound packs before playback predecode
-- Document reference results for `cherrymx-black-abs`: cached lookup now averages 43.25 ns/op, 13.7x faster than the v0.0.5 cached model, with 0 sample bytes copied per playback
+- Document reference results for `cherrymx-black-abs`: cached lookup now averages 43.50 ns/op, 27.2x faster than the v0.0.5 cached model, with 0 sample bytes copied per playback
 
 ### Security and Signing
 
-- Publish certified Windows and macOS packages: Windows installers are Authenticode-signed, and macOS builds are Developer ID signed, notarized, stapled, and verified
+- Publish signed and verified Windows and macOS packages: Windows installers are Authenticode-signed, and macOS builds are Developer ID signed, notarized, stapled, and verified
 - Add a dedicated signed build workflow for macOS Intel, macOS Apple Silicon, Windows x64, and Windows ARM64 packages
 - Add Windows Azure Artifact Signing preflight, NSIS installer signing, and Authenticode verification before publishing signed artifacts
 - Modernize the release workflow with verify jobs before release publishing, narrower GitHub token permissions, concurrency control, Node 24, pnpm cache, stable Rust, and explicit release artifact uploads

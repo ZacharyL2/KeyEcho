@@ -12,10 +12,22 @@ concurrency:
 
 env:
   CARGO_INCREMENTAL: 0
+  CI: true
   RUST_BACKTRACE: short
 
 jobs:
+  validate-release-ref:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require main branch
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "main" ]; then
+            echo "Release Build must be run from main, got ${GITHUB_REF_NAME}."
+            exit 1
+          fi
+
   verify:
+    needs: validate-release-ref
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
@@ -61,10 +73,11 @@ jobs:
         run: pnpm test
 
   verify-platforms:
+    needs: validate-release-ref
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-2025, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout Repository
@@ -102,13 +115,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2025
             target: x86_64-pc-windows-msvc
             files: |
               src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
               src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.nsis.zip
               src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.nsis.zip.sig
-          - os: windows-latest
+          - os: windows-2025
             target: aarch64-pc-windows-msvc
             files: |
               src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*.exe
@@ -130,6 +143,7 @@ jobs:
               src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
 
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
@@ -164,12 +178,280 @@ jobs:
           VERSION="$(node -e "const fs = require('fs'); const text = fs.readFileSync('src-tauri/Cargo.toml', 'utf8'); console.log(text.match(/^version = \"([^\"]+)\"/m)[1]);")"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
-      - name: Tauri build
+      - name: Import Developer ID certificate
+        if: runner.os == 'macOS'
         env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          if ! printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12 2>/dev/null; then
+            printf '%s' "$APPLE_CERTIFICATE" | base64 -D > certificate.p12
+          fi
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security import certificate.p12 \
+            -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            build.keychain
+          security find-identity -v -p codesigning build.keychain | grep "Developer ID Application: WaveApp LLC"
+
+      - name: Install Azure Artifact Signing CLI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $source = Join-Path $env:RUNNER_TEMP "artifact-signing-cli"
+          git clone https://github.com/Levminer/artifact-signing-cli $source
+          git -C $source checkout c586ee822d368d1a6b6c924eb2b5403b568d0473
+
+          $main = Join-Path $source "src\main.rs"
+          $content = Get-Content $main -Raw
+          $old = @'
+                  "-p",
+                  args.azure_client_secret
+          '@
+          $new = @'
+                  format!("--password={}", args.azure_client_secret)
+          '@
+          if (-not $content.Contains($old)) {
+            throw "Artifact Signing CLI Azure login patch target was not found."
+          }
+          $content.Replace($old, $new) | Set-Content $main -Encoding utf8
+
+          cargo install --locked --path $source
+          "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Check Azure Artifact Signing CLI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $signer = Join-Path $env:USERPROFILE ".cargo\bin\artifact-signing-cli.exe"
+          if (-not (Test-Path $signer)) {
+            throw "Missing Artifact Signing CLI at $signer"
+          }
+          & $signer --help
+
+      - name: Create Windows signing config
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $signer = Join-Path $env:USERPROFILE ".cargo\bin\artifact-signing-cli.exe"
+          if (-not (Test-Path $signer)) {
+            throw "Missing Artifact Signing CLI at $signer"
+          }
+
+          $signScript = Join-Path $env:RUNNER_TEMP "keyecho-windows-sign.ps1"
+          $signScriptLines = @(
+            '$ErrorActionPreference = "Stop"',
+            '',
+            '$file = $args[0]',
+            'if (-not (Test-Path $file)) {',
+            '  throw "Missing file to sign: $file"',
+            '}',
+            '',
+            '$signer = Join-Path $env:USERPROFILE ".cargo\bin\artifact-signing-cli.exe"',
+            'if (-not (Test-Path $signer)) {',
+            '  throw "Missing Artifact Signing CLI at $signer"',
+            '}',
+            '',
+            '$endpoint = $env:AZURE_CODESIGN_ENDPOINT.Trim()',
+            '$account = $env:AZURE_CODESIGN_ACCOUNT_NAME.Trim()',
+            '$profile = $env:AZURE_CODESIGN_CERT_PROFILE_NAME.Trim()',
+            '',
+            'Write-Host "Signing $file with Azure Artifact Signing profile $profile"',
+            '& $signer -e $endpoint -a $account -c $profile -d "KeyEcho" $file',
+            'if ($LASTEXITCODE -ne 0) {',
+            '  throw "Artifact Signing CLI failed with exit code $LASTEXITCODE"',
+            '}'
+          )
+          $signScriptLines | Set-Content $signScript -Encoding utf8
+
+          $signCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File $signScript %1"
+          $config = @{
+            bundle = @{
+              windows = @{
+                signCommand = $signCommand
+              }
+            }
+          } | ConvertTo-Json -Depth 6
+          $config | Set-Content "src-tauri/tauri.windows.release-signing.conf.json" -Encoding utf8
+
+      - name: Preflight Azure Artifact Signing
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CODESIGN_ENDPOINT: ${{ secrets.AZURE_CODESIGN_ENDPOINT }}
+          AZURE_CODESIGN_ACCOUNT_NAME: ${{ secrets.AZURE_CODESIGN_ACCOUNT_NAME }}
+          AZURE_CODESIGN_CERT_PROFILE_NAME: ${{ secrets.AZURE_CODESIGN_CERT_PROFILE_NAME }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $signer = Join-Path $env:USERPROFILE ".cargo\bin\artifact-signing-cli.exe"
+          if (-not (Test-Path $signer)) {
+            throw "Missing Artifact Signing CLI at $signer"
+          }
+
+          $testExe = Join-Path $env:RUNNER_TEMP "keyecho-signing-preflight.exe"
+          Copy-Item "$env:SystemRoot\System32\where.exe" $testExe -Force
+
+          $endpoint = $env:AZURE_CODESIGN_ENDPOINT.Trim()
+          $account = $env:AZURE_CODESIGN_ACCOUNT_NAME.Trim()
+          $profile = $env:AZURE_CODESIGN_CERT_PROFILE_NAME.Trim()
+
+          Write-Host "Running Azure Artifact Signing preflight for profile $profile"
+          & $signer -e $endpoint -a $account -c $profile -d "KeyEcho signing preflight" $testExe
+          if ($LASTEXITCODE -ne 0) {
+            throw "Artifact Signing CLI preflight failed with exit code $LASTEXITCODE"
+          }
+
+          $signature = Get-AuthenticodeSignature $testExe
+          $signature | Format-List
+          if ($signature.Status -ne "Valid") {
+            throw "Preflight signature status is $($signature.Status)"
+          }
+
+      - name: Build, sign, and notarize macOS bundles
+        if: runner.os == 'macOS'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: 'Developer ID Application: WaveApp LLC (8VFAY2H953)'
           NODE_OPTIONS: --max_old_space_size=4096
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY || secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || secrets.TAURI_KEY_PASSWORD }}
-        run: pnpm build -- --target ${{ matrix.target }}
+        run: pnpm tauri build --target ${{ matrix.target }} --ci
+
+      - name: Notarize and staple macOS DMGs
+        if: runner.os == 'macOS'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          shopt -s nullglob
+          dmg_paths=(src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
+          if [ ${#dmg_paths[@]} -eq 0 ]; then
+            echo "No DMG files found to notarize."
+            exit 1
+          fi
+
+          for dmg_path in "${dmg_paths[@]}"; do
+            echo "Submitting $dmg_path to Apple notarization"
+            xcrun notarytool submit "$dmg_path" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait
+
+            xcrun stapler staple "$dmg_path"
+            xcrun stapler validate "$dmg_path"
+          done
+
+      - name: Verify macOS signature and notarization
+        if: runner.os == 'macOS'
+        run: |
+          app_path="src-tauri/target/${{ matrix.target }}/release/bundle/macos/KeyEcho.app"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          xcrun stapler validate "$app_path"
+          spctl --assess --type execute --verbose=4 "$app_path"
+
+          shopt -s nullglob
+          dmg_paths=(src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
+          if [ ${#dmg_paths[@]} -eq 0 ]; then
+            echo "No DMG files found to verify."
+            exit 1
+          fi
+
+          for dmg_path in "${dmg_paths[@]}"; do
+            codesign --verify --strict --verbose=2 "$dmg_path"
+            xcrun stapler validate "$dmg_path"
+            spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
+          done
+
+      - name: Build signed Windows bundles
+        if: runner.os == 'Windows'
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CODESIGN_ENDPOINT: ${{ secrets.AZURE_CODESIGN_ENDPOINT }}
+          AZURE_CODESIGN_ACCOUNT_NAME: ${{ secrets.AZURE_CODESIGN_ACCOUNT_NAME }}
+          AZURE_CODESIGN_CERT_PROFILE_NAME: ${{ secrets.AZURE_CODESIGN_CERT_PROFILE_NAME }}
+          NODE_OPTIONS: --max_old_space_size=4096
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY || secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || secrets.TAURI_KEY_PASSWORD }}
+        run: pnpm tauri build --target ${{ matrix.target }} --config src-tauri/tauri.windows.release-signing.conf.json --ci
+
+      - name: Collect Windows installers to verify
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $catalog = Join-Path $env:GITHUB_WORKSPACE "artifact-signing-files.txt"
+          $paths = New-Object System.Collections.Generic.List[string]
+
+          $nsisDir = Join-Path $env:GITHUB_WORKSPACE "src-tauri\target\${{ matrix.target }}\release\bundle\nsis"
+          if (Test-Path $nsisDir) {
+            Get-ChildItem $nsisDir -Filter *.exe | ForEach-Object {
+              $relative = $_.FullName.Substring($env:GITHUB_WORKSPACE.Length + 1).Replace('\', '/')
+              $paths.Add($relative)
+            }
+          }
+
+          $uniquePaths = $paths | Sort-Object -Unique
+          if (-not $uniquePaths) {
+            throw "No Windows NSIS installers found to verify."
+          }
+
+          $uniquePaths | Set-Content $catalog
+          Get-Content $catalog
+
+      - name: Verify Windows signatures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Get-Content (Join-Path $env:GITHUB_WORKSPACE "artifact-signing-files.txt") | ForEach-Object {
+            $fullPath = Join-Path $env:GITHUB_WORKSPACE ($_ -replace '/', '\')
+            $signature = Get-AuthenticodeSignature $fullPath
+            Write-Host "${_}: $($signature.Status) - $($signature.SignerCertificate.Subject)"
+            if ($signature.Status -ne "Valid") {
+              throw "Invalid signature: $fullPath"
+            }
+          }
+
+      - name: Report Windows app executable signature
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($binaryName in @("keyecho.exe", "KeyEcho.exe")) {
+            $relative = "src-tauri/target/${{ matrix.target }}/release/$binaryName"
+            $fullPath = Join-Path $env:GITHUB_WORKSPACE ($relative -replace '/', '\')
+            if (Test-Path $fullPath) {
+              $signature = Get-AuthenticodeSignature $fullPath
+              Write-Host "${relative}: $($signature.Status) - $($signature.SignerCertificate.Subject)"
+            }
+          }
 
       - name: Rename macOS updater artifact
         if: runner.os == 'macOS'
