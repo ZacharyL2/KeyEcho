@@ -2,33 +2,140 @@ name: Release Build
 
 on:
   workflow_dispatch:
-permissions: write-all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-build-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: short
 
 jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: Install Linux Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            pkg-config \
+            wget
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Tests
+        run: pnpm test
+
+  verify-platforms:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Tests
+        run: pnpm test
+
   release:
+    needs: [verify, verify-platforms]
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            files: |
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.nsis.zip
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.nsis.zip.sig
           - os: windows-latest
             target: aarch64-pc-windows-msvc
+            files: |
+              src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*.exe
+              src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*.nsis.zip
+              src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*.nsis.zip.sig
           - os: macos-latest
             target: aarch64-apple-darwin
+            updaterArch: aarch64
+            files: |
+              src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+              src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
+              src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
           - os: macos-latest
             target: x86_64-apple-darwin
+            updaterArch: x64
+            files: |
+              src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
+              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
 
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@1.77.0
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Add Rust Target
         run: rustup target add ${{ matrix.target }}
@@ -38,30 +145,53 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Install Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
 
-      - uses: pnpm/action-setup@v4
-        name: Install with pnpm
+      - name: Install Node
+        uses: actions/setup-node@v6
         with:
-          run_install: true
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Get Version
+        shell: bash
+        run: |
+          VERSION="$(node -e "const fs = require('fs'); const text = fs.readFileSync('src-tauri/Cargo.toml', 'utf8'); console.log(text.match(/^version = \"([^\"]+)\"/m)[1]);")"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Tauri build
-        uses: tauri-apps/tauri-action@v0
         env:
           NODE_OPTIONS: --max_old_space_size=4096
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY || secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || secrets.TAURI_KEY_PASSWORD }}
+        run: pnpm build -- --target ${{ matrix.target }}
+
+      - name: Rename macOS updater artifact
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          DIR="src-tauri/target/${{ matrix.target }}/release/bundle/macos"
+          mv "${DIR}/KeyEcho.app.tar.gz" "${DIR}/KeyEcho_${{ matrix.updaterArch }}.app.tar.gz"
+          mv "${DIR}/KeyEcho.app.tar.gz.sig" "${DIR}/KeyEcho_${{ matrix.updaterArch }}.app.tar.gz.sig"
+
+      - name: Upload Release
+        uses: softprops/action-gh-release@v3
         with:
-          tagName: v__VERSION__
-          releaseName: KeyEcho v__VERSION__
-          tauriScript: pnpm
-          args: --target ${{ matrix.target }}
+          tag_name: v${{ env.VERSION }}
+          name: 'KeyEcho v${{ env.VERSION }}'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fail_on_unmatched_files: true
+          files: ${{ matrix.files }}
 
   release-for-linux:
+    needs: [verify, verify-platforms]
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -75,14 +205,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build for Linux
         uses: ./.github/build-for-linux
         env:
           NODE_OPTIONS: --max_old_space_size=4096
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY || secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || secrets.TAURI_KEY_PASSWORD }}
         with:
           target: ${{ matrix.target }}
 
@@ -92,31 +222,40 @@ jobs:
           echo "VERSION=$(toml get src-tauri/Cargo.toml package.version | tr -d '"')" >> $GITHUB_ENV
 
       - name: Upload Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{env.VERSION}}
           name: 'KeyEcho v${{env.VERSION}}'
           token: ${{ secrets.GITHUB_TOKEN }}
+          fail_on_unmatched_files: true
           files: |
             src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage.tar.gz.sig
 
   release-update:
     runs-on: ubuntu-latest
     needs: [release, release-for-linux]
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
 
       - name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
-      - uses: pnpm/action-setup@v4
-        name: Install with pnpm
-        with:
-          run_install: true
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Release updater file
         run: pnpm updater

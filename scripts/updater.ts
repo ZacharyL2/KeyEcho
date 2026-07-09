@@ -1,20 +1,31 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 import { context, getOctokit } from '@actions/github';
 
-const UPDATE_LOG = 'UPDATELOG.md';
+const CHANGELOG = 'CHANGELOG.md';
 
 const UPDATE_TAG_NAME = 'updater';
 const UPDATE_JSON_FILE = 'update.json';
+const RELEASE_TAG_RE = /^v\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/;
+const MACOS_AARCH64_RE = /(?:^|[_.-])(?:aarch64|arm64)(?:[_.-]|$)/i;
+const MACOS_X64_RE = /(?:^|[_.-])(?:x64|x86_64)(?:[_.-]|$)/i;
+
+export interface UpdatePlatform {
+  signature: string;
+  url: string;
+}
+
+export type UpdatePlatforms = Record<string, UpdatePlatform>;
 
 function resolveUpdateLog(tag: string) {
   const cwd = process.cwd();
-  const filePath = path.join(cwd, UPDATE_LOG);
+  const filePath = path.join(cwd, CHANGELOG);
 
   if (!fs.existsSync(filePath)) {
-    throw new Error('Could not find UPDATELOG.md');
+    throw new Error(`Could not find ${CHANGELOG}`);
   }
 
   const data = fs.readFileSync(filePath, 'utf-8');
@@ -43,7 +54,7 @@ function resolveUpdateLog(tag: string) {
   );
 
   if (!map[tag]) {
-    throw new Error(`Could not find "${tag}" in UPDATELOG.md`);
+    throw new Error(`Could not find "${tag}" in ${CHANGELOG}`);
   }
 
   return map[tag].join('\n').trim();
@@ -55,7 +66,75 @@ async function getSignature(url: string) {
     headers: { 'Content-Type': 'application/octet-stream' },
   });
 
-  return response.text();
+  if (!response.ok) {
+    throw new Error(`Signature download failed: ${url} (${response.status})`);
+  }
+
+  return (await response.text()).trim();
+}
+
+export function resolvePlatforms(assetName: string): string[] {
+  if (assetName.endsWith('x64-setup.nsis.zip')) {
+    return ['win64', 'windows-x86_64'];
+  }
+
+  if (assetName.endsWith('arm64-setup.nsis.zip')) {
+    return ['windows-aarch64'];
+  }
+
+  if (assetName.endsWith('.app.tar.gz')) {
+    if (MACOS_AARCH64_RE.test(assetName)) {
+      return ['darwin-aarch64'];
+    }
+
+    if (MACOS_X64_RE.test(assetName)) {
+      return ['darwin', 'darwin-intel', 'darwin-x86_64'];
+    }
+
+    return [];
+  }
+
+  if (assetName.endsWith('.AppImage.tar.gz')) {
+    if (/amd64|x86_64/i.test(assetName)) {
+      return ['linux', 'linux-x86_64'];
+    }
+
+    if (/aarch64|arm64/i.test(assetName)) {
+      return ['linux-aarch64'];
+    }
+
+    if (/arm(?:v7l?|hf)/i.test(assetName)) {
+      return ['linux-armv7'];
+    }
+  }
+
+  return [];
+}
+
+function isAmbiguousMacosUpdaterArtifact(assetName: string): boolean {
+  return (
+    assetName.endsWith('.app.tar.gz') && !resolvePlatforms(assetName).length
+  );
+}
+
+export function getPublishPlatforms(
+  platforms: UpdatePlatforms,
+): UpdatePlatforms {
+  const publishPlatforms = Object.fromEntries(
+    Object.entries(platforms).filter(([, value]) => Boolean(value.url)),
+  );
+
+  const missingSignatures = Object.entries(publishPlatforms)
+    .filter(([, value]) => !value.signature)
+    .map(([key]) => key);
+
+  if (missingSignatures.length) {
+    throw new Error(
+      `Missing updater signatures for: ${missingSignatures.join(', ')}`,
+    );
+  }
+
+  return publishPlatforms;
 }
 
 async function resolveUpdater() {
@@ -70,29 +149,33 @@ async function resolveUpdater() {
 
   const github = getOctokit(process.env.GITHUB_TOKEN);
 
-  const { data: tags } = await github.rest.repos.listTags({
+  const releases = await github.paginate(github.rest.repos.listReleases, {
     ...options,
-    per_page: 10,
-    page: 1,
+    per_page: 100,
   });
 
-  const tag = tags.find((t) => t.name.startsWith('v'));
+  const latestRelease = releases.find(
+    (release) =>
+      !release.draft &&
+      !release.prerelease &&
+      release.tag_name !== UPDATE_TAG_NAME &&
+      RELEASE_TAG_RE.test(release.tag_name),
+  );
 
-  if (!tag) {
+  if (!latestRelease) {
     throw new Error('not found latest publish tag');
   }
 
-  // eslint-disable-next-line no-console
-  console.log('tag: ', tag);
+  console.log('release tag: ', latestRelease.tag_name);
 
-  const { data: latestRelease } = await github.rest.repos.getReleaseByTag({
-    ...options,
-    tag: tag.name,
-  });
-
-  const updateData = {
-    name: tag.name,
-    notes: resolveUpdateLog(tag.name),
+  const updateData: {
+    name: string;
+    notes: string;
+    platforms: UpdatePlatforms;
+    pub_date: string;
+  } = {
+    name: latestRelease.tag_name,
+    notes: resolveUpdateLog(latestRelease.tag_name),
     pub_date: new Date().toISOString(),
     platforms: {
       win64: { signature: '', url: '' }, // compatible with older formats
@@ -113,70 +196,34 @@ async function resolveUpdater() {
 
   const promises = latestRelease.assets.map(async (asset) => {
     const { name, browser_download_url } = asset;
+    const isSignature = name.endsWith('.sig');
+    const assetName = isSignature ? name.slice(0, -4) : name;
+    const platforms = resolvePlatforms(assetName);
 
-    // win64 url
-    if (name.endsWith('x64-setup.nsis.zip')) {
-      updateData.platforms.win64.url = browser_download_url;
-      updateData.platforms['windows-x86_64'].url = browser_download_url;
-    }
-    // win64 signature
-    if (name.endsWith('x64-setup.nsis.zip.sig')) {
-      const sig = await getSignature(browser_download_url);
-      updateData.platforms.win64.signature = sig;
-      updateData.platforms['windows-x86_64'].signature = sig;
-    }
-    // win arm url
-    if (name.endsWith('arm64-setup.nsis.zip')) {
-      updateData.platforms['windows-aarch64'].url = browser_download_url;
-    }
-    // win arm signature
-    if (name.endsWith('arm64-setup.nsis.zip.sig')) {
-      const sig = await getSignature(browser_download_url);
-      updateData.platforms['windows-aarch64'].signature = sig;
+    if (!platforms.length) {
+      if (isAmbiguousMacosUpdaterArtifact(assetName)) {
+        throw new Error(
+          `Could not resolve macOS updater platform from asset name: ${assetName}`,
+        );
+      }
+
+      return;
     }
 
-    // darwin url (intel)
-    if (name.endsWith('.app.tar.gz') && !name.includes('aarch')) {
-      updateData.platforms.darwin.url = browser_download_url;
-      updateData.platforms['darwin-intel'].url = browser_download_url;
-      updateData.platforms['darwin-x86_64'].url = browser_download_url;
-    }
-    // darwin signature (intel)
-    if (name.endsWith('.app.tar.gz.sig') && !name.includes('aarch')) {
+    if (isSignature) {
       const sig = await getSignature(browser_download_url);
-      updateData.platforms.darwin.signature = sig;
-      updateData.platforms['darwin-intel'].signature = sig;
-      updateData.platforms['darwin-x86_64'].signature = sig;
-    }
-
-    // darwin url (aarch)
-    if (name.endsWith('aarch64.app.tar.gz')) {
-      updateData.platforms['darwin-aarch64'].url = browser_download_url;
-    }
-    // darwin signature (aarch)
-    if (name.endsWith('aarch64.app.tar.gz.sig')) {
-      const sig = await getSignature(browser_download_url);
-      updateData.platforms['darwin-aarch64'].signature = sig;
-    }
-
-    // linux x64 url
-    if (name.endsWith('amd64.AppImage.tar.gz')) {
-      updateData.platforms.linux.url = browser_download_url;
-      updateData.platforms['linux-x86_64'].url = browser_download_url;
-      updateData.platforms['linux-aarch64'].url = browser_download_url;
-      updateData.platforms['linux-armv7'].url = browser_download_url;
-    }
-    // linux x64 signature
-    if (name.endsWith('amd64.AppImage.tar.gz.sig')) {
-      const sig = await getSignature(browser_download_url);
-      updateData.platforms.linux.signature = sig;
-      updateData.platforms['linux-x86_64'].signature = sig;
-      updateData.platforms['linux-aarch64'].signature = sig;
-      updateData.platforms['linux-armv7'].signature = sig;
+      for (const platform of platforms) {
+        updateData.platforms[platform].signature = sig;
+      }
+    } else {
+      for (const platform of platforms) {
+        updateData.platforms[platform].url = browser_download_url;
+      }
     }
   });
 
-  await Promise.allSettled(promises);
+  await Promise.all(promises);
+  const platforms = getPublishPlatforms(updateData.platforms);
 
   // update the update.json
   const { data: updateRelease } = await github.rest.repos.getReleaseByTag({
@@ -202,11 +249,7 @@ async function resolveUpdater() {
     data: JSON.stringify(
       {
         ...updateData,
-        platforms: Object.fromEntries(
-          Object.entries(updateData.platforms).filter(([_k, v]) =>
-            Boolean(v.url),
-          ),
-        ),
+        platforms,
       },
       null,
       2,
@@ -214,4 +257,19 @@ async function resolveUpdater() {
   });
 }
 
-resolveUpdater();
+function isEntrypoint(): boolean {
+  if (!process.argv[1]) {
+    return false;
+  }
+
+  const currentPath = fileURLToPath(import.meta.url);
+  const invokedPath = path.resolve(process.argv[1]);
+  return invokedPath === currentPath || `${invokedPath}.ts` === currentPath;
+}
+
+if (isEntrypoint()) {
+  resolveUpdater().catch((error: unknown) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
