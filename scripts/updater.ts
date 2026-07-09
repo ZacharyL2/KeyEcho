@@ -21,7 +21,6 @@ export interface UpdatePlatform {
 export type UpdatePlatforms = Record<string, UpdatePlatform>;
 
 export interface UpdateManifest {
-  name: string;
   notes: string;
   platforms: UpdatePlatforms;
   pub_date: string;
@@ -34,7 +33,6 @@ export function createUpdateManifest(
   pubDate = new Date().toISOString(),
 ): UpdateManifest {
   return {
-    name: tag,
     version: tag,
     notes,
     pub_date: pubDate,
@@ -42,15 +40,22 @@ export function createUpdateManifest(
       win64: { signature: '', url: '' }, // compatible with older formats
       linux: { signature: '', url: '' }, // compatible with older formats
       darwin: { signature: '', url: '' }, // compatible with older formats
+      'windows-x86_64-nsis': { signature: '', url: '' },
       'windows-x86_64': { signature: '', url: '' },
+      'windows-aarch64-nsis': { signature: '', url: '' },
       'windows-aarch64': { signature: '', url: '' },
 
+      'darwin-x86_64-app': { signature: '', url: '' },
       'darwin-x86_64': { signature: '', url: '' },
       'darwin-intel': { signature: '', url: '' },
+      'darwin-aarch64-app': { signature: '', url: '' },
       'darwin-aarch64': { signature: '', url: '' },
 
+      'linux-x86_64-appimage': { signature: '', url: '' },
       'linux-x86_64': { signature: '', url: '' },
+      'linux-aarch64-appimage': { signature: '', url: '' },
       'linux-aarch64': { signature: '', url: '' },
+      'linux-armv7-appimage': { signature: '', url: '' },
       'linux-armv7': { signature: '', url: '' },
     },
   };
@@ -111,20 +116,20 @@ async function getSignature(url: string) {
 
 export function resolvePlatforms(assetName: string): string[] {
   if (assetName.endsWith('x64-setup.nsis.zip')) {
-    return ['win64', 'windows-x86_64'];
+    return ['win64', 'windows-x86_64-nsis', 'windows-x86_64'];
   }
 
   if (assetName.endsWith('arm64-setup.nsis.zip')) {
-    return ['windows-aarch64'];
+    return ['windows-aarch64-nsis', 'windows-aarch64'];
   }
 
   if (assetName.endsWith('.app.tar.gz')) {
     if (MACOS_AARCH64_RE.test(assetName)) {
-      return ['darwin-aarch64'];
+      return ['darwin-aarch64-app', 'darwin-aarch64'];
     }
 
     if (MACOS_X64_RE.test(assetName)) {
-      return ['darwin', 'darwin-intel', 'darwin-x86_64'];
+      return ['darwin', 'darwin-intel', 'darwin-x86_64-app', 'darwin-x86_64'];
     }
 
     return [];
@@ -132,15 +137,15 @@ export function resolvePlatforms(assetName: string): string[] {
 
   if (assetName.endsWith('.AppImage.tar.gz')) {
     if (/amd64|x86_64/i.test(assetName)) {
-      return ['linux', 'linux-x86_64'];
+      return ['linux', 'linux-x86_64-appimage', 'linux-x86_64'];
     }
 
     if (/aarch64|arm64/i.test(assetName)) {
-      return ['linux-aarch64'];
+      return ['linux-aarch64-appimage', 'linux-aarch64'];
     }
 
     if (/arm(?:v7l?|hf)/i.test(assetName)) {
-      return ['linux-armv7'];
+      return ['linux-armv7-appimage', 'linux-armv7'];
     }
   }
 

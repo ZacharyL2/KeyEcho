@@ -1,7 +1,4 @@
-import { isTauri } from '@tauri-apps/api/core';
 import { disable, enable, isEnabled } from '@tauri-apps/plugin-autostart';
-import { relaunch } from '@tauri-apps/plugin-process';
-import { check } from '@tauri-apps/plugin-updater';
 import type { JSX } from 'solid-js';
 import {
   createEffect,
@@ -28,9 +25,6 @@ const APP_VERSION = '1.0.0';
 const APP_CAMPAIGN = `v${APP_VERSION.replace(/\./g, '_')}`;
 const KEYECHO_VOTE_URL = `https://keyecho.app/?source=keyecho_app&intent=sound_pack_vote&version=${APP_VERSION}&utm_source=keyecho_app&utm_medium=desktop&utm_campaign=${APP_CAMPAIGN}#queue`;
 const PROJECT_UPDATE_DISMISSED_KEY = `keyecho:v${APP_VERSION}:update-dismissed-session`;
-const APP_UPDATE_CHECK_DELAY_MS = 1200;
-
-let appUpdateCheckStarted = false;
 
 // Pack lists are remote (GitHub) and grow over time, so display names come
 // from token rules rather than a per-pack map: brand tokens that don't
@@ -194,58 +188,6 @@ function forgetProjectUpdateDismissed() {
     sessionStorage.removeItem(PROJECT_UPDATE_DISMISSED_KEY);
   } catch {
     // Showing the update again is best-effort.
-  }
-}
-
-function createAppUpdateMessage(version: string, notes?: string): string {
-  const trimmedNotes = notes?.trim();
-
-  return [
-    `KeyEcho ${version} is available.`,
-    'Install it now and restart KeyEcho?',
-    trimmedNotes ? `\nRelease notes:\n${trimmedNotes}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
-async function checkForAppUpdate(notify: Notify) {
-  if (appUpdateCheckStarted || !isTauri()) {
-    return;
-  }
-
-  appUpdateCheckStarted = true;
-
-  let update: Awaited<ReturnType<typeof check>>;
-  try {
-    update = await check();
-  } catch {
-    return;
-  }
-
-  if (!update) {
-    return;
-  }
-
-  // eslint-disable-next-line no-alert
-  const accepted = window.confirm(
-    createAppUpdateMessage(update.version, update.body),
-  );
-
-  if (!accepted) {
-    await update.close().catch(() => {});
-    return;
-  }
-
-  try {
-    notify(`Downloading KeyEcho ${update.version}...`);
-    await update.downloadAndInstall();
-    notify('Update installed. Restarting KeyEcho...');
-    await relaunch();
-  } catch (error) {
-    notify(`Update install failed. Reason: ${error}`, 'error');
-  } finally {
-    await update.close().catch(() => {});
   }
 }
 
@@ -704,13 +646,6 @@ export default function App() {
   const [projectUpdateVisible, setProjectUpdateVisible] = createSignal(
     !hasDismissedProjectUpdate(),
   );
-
-  onMount(() => {
-    window.setTimeout(
-      () => void checkForAppUpdate(notifier.notify),
-      APP_UPDATE_CHECK_DELAY_MS,
-    );
-  });
 
   const showProjectUpdate = () => {
     forgetProjectUpdateDismissed();

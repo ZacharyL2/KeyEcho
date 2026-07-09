@@ -113,7 +113,7 @@ pub struct KeySoundpack {
 }
 
 impl KeySoundpack {
-    pub fn try_load(handle: AppHandle) -> Result<Self> {
+    pub fn try_load(handle: &AppHandle) -> Result<Self> {
         let config_path = handle.path().app_data_dir()?.join("soundpack.config.json");
         let config = SoundpackConfig::load(&config_path);
         let volume = normalize_volume(config.volume).unwrap_or_else(|_| default_volume());
