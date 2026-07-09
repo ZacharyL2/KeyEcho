@@ -1,7 +1,4 @@
-use std::{
-    os::raw::c_int,
-    ptr::{addr_of_mut, null_mut},
-};
+use std::{cell::RefCell, os::raw::c_int, ptr::null_mut};
 
 use winapi::{
     shared::{
@@ -11,13 +8,16 @@ use winapi::{
     um::{
         errhandlingapi::GetLastError,
         winuser::{
-            CallNextHookEx, GetMessageA, SetWindowsHookExA, HC_ACTION, KBDLLHOOKSTRUCT,
-            WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+            CallNextHookEx, DispatchMessageA, GetMessageA, SetWindowsHookExA, TranslateMessage,
+            UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN,
+            WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
         },
     },
 };
 
 use super::{Key, KeyEvent, ListenError};
+
+type EventCallback = Box<dyn FnMut(KeyEvent)>;
 
 // https://docs.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
 fn key_from_code(code: u32) -> Key {
@@ -129,48 +129,74 @@ fn key_from_code(code: u32) -> Key {
     }
 }
 
-static mut HOOK: HHOOK = null_mut();
-static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(KeyEvent)>> = None;
+thread_local! {
+    static CALLBACK: RefCell<Option<EventCallback>> = RefCell::new(None);
+}
 
 pub fn listen<T>(callback: T) -> Result<(), ListenError>
 where
     T: FnMut(KeyEvent) + 'static,
 {
-    unsafe {
-        GLOBAL_CALLBACK = Some(Box::new(callback));
+    CALLBACK.with(|stored| {
+        stored.replace(Some(Box::new(callback)));
+    });
 
+    unsafe {
         let hook = SetWindowsHookExA(WH_KEYBOARD_LL, Some(raw_callback), null_mut(), 0);
         if hook.is_null() {
+            CALLBACK.with(|stored| {
+                stored.replace(None);
+            });
             return Err(ListenError::KeyHook(GetLastError()));
         }
 
-        HOOK = hook;
+        let result = run_message_loop(hook);
+        CALLBACK.with(|stored| {
+            stored.replace(None);
+        });
 
-        GetMessageA(null_mut(), null_mut(), 0, 0);
+        result
     }
-    Ok(())
 }
 
 unsafe extern "system" fn raw_callback(code: c_int, param: WPARAM, lpdata: LPARAM) -> LRESULT {
     if code == HC_ACTION {
         if let Some(event) = convert_event(param, lpdata) {
-            if let Some(callback) = addr_of_mut!(GLOBAL_CALLBACK)
-                .as_mut()
-                .and_then(|c| c.as_mut())
-            {
-                callback(event);
-            }
+            CALLBACK.with(|stored| {
+                if let Some(callback) = stored.borrow_mut().as_mut() {
+                    callback(event);
+                }
+            });
         }
     }
 
-    CallNextHookEx(HOOK, code, param, lpdata)
+    CallNextHookEx(null_mut(), code, param, lpdata)
+}
+
+unsafe fn run_message_loop(hook: HHOOK) -> Result<(), ListenError> {
+    let mut message: MSG = std::mem::zeroed();
+
+    loop {
+        let status = GetMessageA(&mut message, null_mut(), 0, 0);
+        if status == -1 {
+            let error = GetLastError();
+            UnhookWindowsHookEx(hook);
+            return Err(ListenError::KeyHook(error));
+        }
+        if status == 0 {
+            break;
+        }
+
+        TranslateMessage(&message);
+        DispatchMessageA(&message);
+    }
+
+    UnhookWindowsHookEx(hook);
+    Ok(())
 }
 
 fn convert_event(param: WPARAM, lpdata: LPARAM) -> Option<KeyEvent> {
-    let code = unsafe {
-        let kb = *(lpdata as *const KBDLLHOOKSTRUCT);
-        kb.vkCode
-    };
+    let code = unsafe { (lpdata as *const KBDLLHOOKSTRUCT).as_ref()?.vkCode };
 
     let key = key_from_code(code);
 

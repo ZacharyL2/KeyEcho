@@ -1,22 +1,23 @@
 {
   "compilerOptions": {
-    "module": "ESNext",
     "target": "ESNext",
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
     "lib": ["DOM", "ESNext"],
 
-    "baseUrl": ".",
+    "module": "ESNext",
     "moduleResolution": "Bundler",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["./src/*"]
     },
-
-    "newLine": "LF",
     "resolveJsonModule": true,
     "types": ["vite/client"],
 
     "allowJs": false,
     "strict": true,
     "strictNullChecks": true,
+
+    "newLine": "LF",
     "noEmit": true,
     "sourceMap": false,
     "esModuleInterop": true,

@@ -1,7 +1,7 @@
 use std::{
     ffi::CStr,
-    os::raw::{c_char, c_int, c_uchar, c_uint},
-    ptr::{addr_of_mut, null},
+    os::raw::{c_char, c_int, c_uchar, c_uint, c_void},
+    ptr::null,
 };
 
 use x11::{xlib, xrecord};
@@ -117,14 +117,13 @@ fn key_from_code(code: c_uint) -> Key {
     }
 }
 
-static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(KeyEvent)>> = None;
+type EventCallback = Box<dyn FnMut(KeyEvent)>;
 
 pub fn listen<T>(callback: T) -> Result<(), ListenError>
 where
     T: FnMut(KeyEvent) + 'static,
 {
     unsafe {
-        GLOBAL_CALLBACK = Some(Box::new(callback));
         let dpy_control = xlib::XOpenDisplay(null());
         if dpy_control.is_null() {
             return Err(ListenError::MissingDisplay);
@@ -133,29 +132,43 @@ where
         let extension_name =
             CStr::from_bytes_with_nul(b"RECORD\0").map_err(|_| ListenError::XRecordExtension)?;
         if xlib::XInitExtension(dpy_control, extension_name.as_ptr()).is_null() {
+            xlib::XCloseDisplay(dpy_control);
             return Err(ListenError::XRecordExtension);
         }
 
-        let mut record_range = *xrecord::XRecordAllocRange();
-        record_range.device_events.first = xlib::KeyPress as c_uchar;
-        record_range.device_events.last = xlib::KeyRelease as c_uchar;
+        let record_range = xrecord::XRecordAllocRange();
+        if record_range.is_null() {
+            xlib::XCloseDisplay(dpy_control);
+            return Err(ListenError::RecordContext);
+        }
+        (*record_range).device_events.first = xlib::KeyPress as c_uchar;
+        (*record_range).device_events.last = xlib::KeyRelease as c_uchar;
 
-        let context = xrecord::XRecordCreateContext(
-            dpy_control,
-            0,
-            #[allow(const_item_mutation)]
-            &mut xrecord::XRecordAllClients,
-            1,
-            &mut &mut record_range as *mut _ as *mut _,
-            1,
-        );
+        let mut clients = xrecord::XRecordAllClients;
+        let mut ranges = record_range;
+        let context =
+            xrecord::XRecordCreateContext(dpy_control, 0, &mut clients, 1, &mut ranges, 1);
+        xlib::XFree(record_range.cast::<c_void>());
         if context == 0 {
+            xlib::XCloseDisplay(dpy_control);
             return Err(ListenError::RecordContext);
         }
 
         xlib::XSync(dpy_control, 0);
 
-        if xrecord::XRecordEnableContext(dpy_control, context, Some(raw_callback), &mut 0) == 0 {
+        let callback = Box::new(Box::new(callback) as EventCallback);
+        let callback_ptr = Box::into_raw(callback);
+        let enabled = xrecord::XRecordEnableContext(
+            dpy_control,
+            context,
+            Some(raw_callback),
+            callback_ptr.cast::<c_char>(),
+        );
+        drop(Box::from_raw(callback_ptr));
+        xrecord::XRecordFreeContext(dpy_control, context);
+        xlib::XCloseDisplay(dpy_control);
+
+        if enabled == 0 {
             return Err(ListenError::RecordContextEnabling);
         }
     }
@@ -171,22 +184,17 @@ struct XRecordDatum {
 }
 
 unsafe extern "C" fn raw_callback(
-    _null: *mut c_char,
+    closure: *mut c_char,
     raw_data: *mut xrecord::XRecordInterceptData,
 ) {
     if let Some(data) = raw_data.as_ref() {
-        if data.category != xrecord::XRecordFromServer {
-            return;
-        }
-
-        #[allow(clippy::cast_ptr_alignment)]
-        if let Some(xdatum) = (data.data as *const XRecordDatum).as_ref() {
-            if let Some(event) = convert_event(xdatum.type_.into(), xdatum.code.into()) {
-                if let Some(callback) = addr_of_mut!(GLOBAL_CALLBACK)
-                    .as_mut()
-                    .and_then(|c| c.as_mut())
-                {
-                    callback(event);
+        if data.category == xrecord::XRecordFromServer {
+            #[allow(clippy::cast_ptr_alignment)]
+            if let Some(xdatum) = (data.data as *const XRecordDatum).as_ref() {
+                if let Some(event) = convert_event(xdatum.type_.into(), xdatum.code.into()) {
+                    if let Some(callback) = (closure as *mut EventCallback).as_mut() {
+                        callback(event);
+                    }
                 }
             }
         }

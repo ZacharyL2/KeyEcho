@@ -1,7 +1,7 @@
 name: 🐞 Bug Report
 title: '[bug] '
 description: Report a bug
-labels: ["bug"]
+labels: [bug]
 
 body:
   - type: markdown
@@ -11,7 +11,7 @@ body:
         1. Please search for [existing issues](https://github.com/ZacharyL2/KeyEcho/issues?q=is%3Aissue) about this problem first.
         2. Please be sure to fill in a concise and clear title for the issue so that others can quickly search.
         3. Remember to follow our community guidelines and be friendly.
-  
+
   - type: dropdown
     attributes:
       label: OS

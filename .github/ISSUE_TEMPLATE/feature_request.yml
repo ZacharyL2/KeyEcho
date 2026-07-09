@@ -1,7 +1,7 @@
 name: 💡 Feature Request
 title: '[feat] '
 description: Suggest an idea
-labels: ["enhancement"]
+labels: [enhancement]
 
 body:
   - type: textarea
@@ -18,7 +18,7 @@ body:
     attributes:
       label: "Describe the solution you'd like"
       description: A clear description of what change you would like
-      placeholder: "I would like to..."
+      placeholder: I would like to...
     validations:
       required: true
 
@@ -27,7 +27,7 @@ body:
     attributes:
       label: Alternatives considered
       description: "Any alternative solutions you've considered"
-  
+
   - type: textarea
     id: context
     attributes:

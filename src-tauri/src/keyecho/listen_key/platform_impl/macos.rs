@@ -1,13 +1,6 @@
 #![allow(improper_ctypes_definitions)]
-use std::{convert::TryInto, os::raw::c_void, ptr::addr_of_mut};
-
-use cocoa::{
-    base::{id, nil},
-    foundation::NSAutoreleasePool,
-};
-use core_graphics::event::{
-    CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGKeyCode, EventField,
-};
+use core_graphics::event::{CGEvent, CGEventTapLocation, CGEventType, CGKeyCode, EventField};
+use std::{collections::HashSet, convert::TryInto, os::raw::c_void, ptr::null_mut};
 
 use super::{Key, KeyEvent, ListenError};
 
@@ -97,11 +90,11 @@ fn key_from_code(code: CGKeyCode) -> Key {
 
 type CFMachPortRef = *const c_void;
 type CFIndex = u64;
-type CFAllocatorRef = id;
-type CFRunLoopSourceRef = id;
-type CFRunLoopRef = id;
-type CFRunLoopMode = id;
-type CGEventTapProxy = id;
+type CFAllocatorRef = *mut c_void;
+type CFRunLoopSourceRef = *mut c_void;
+type CFRunLoopRef = *mut c_void;
+type CFRunLoopMode = *mut c_void;
+type CGEventTapProxy = *mut c_void;
 type CGEventRef = CGEvent;
 
 type CGEventMask = u64;
@@ -123,7 +116,7 @@ extern "C" {
         options: CGEventTapOption,
         eventsOfInterest: CGEventMask,
         callback: CGEventTapCallback,
-        user_info: id,
+        user_info: *mut c_void,
     ) -> CFMachPortRef;
 
     fn CFMachPortCreateRunLoopSource(
@@ -153,29 +146,38 @@ enum CGEventTapOption {
     ListenOnly = 1,
 }
 
-static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(KeyEvent)>> = None;
+struct EventTapState {
+    callback: Box<dyn FnMut(KeyEvent)>,
+    pressed_modifiers: HashSet<CGKeyCode>,
+}
 
 pub fn listen<T>(callback: T) -> Result<(), ListenError>
 where
     T: FnMut(KeyEvent) + 'static,
 {
     unsafe {
-        GLOBAL_CALLBACK = Some(Box::new(callback));
-        let _pool = NSAutoreleasePool::new(nil);
+        let state = Box::new(EventTapState {
+            callback: Box::new(callback),
+            pressed_modifiers: HashSet::new(),
+        });
+        let state_ptr = Box::into_raw(state);
+
         let tap = CGEventTapCreate(
             CGEventTapLocation::HID,
             kCGHeadInsertEventTap,
             CGEventTapOption::ListenOnly,
             kCGEventMaskForAllEvents,
             raw_callback,
-            nil,
+            state_ptr.cast(),
         );
         if tap.is_null() {
+            drop(Box::from_raw(state_ptr));
             return Err(ListenError::EventTap);
         }
 
-        let run_loop_source = CFMachPortCreateRunLoopSource(nil, tap, 0);
+        let run_loop_source = CFMachPortCreateRunLoopSource(null_mut(), tap, 0);
         if run_loop_source.is_null() {
+            drop(Box::from_raw(state_ptr));
             return Err(ListenError::LoopSource);
         }
 
@@ -183,6 +185,8 @@ where
         CFRunLoopAddSource(current_loop, run_loop_source, kCFRunLoopCommonModes);
         CGEventTapEnable(tap, true);
         CFRunLoopRun();
+
+        drop(Box::from_raw(state_ptr));
     }
 
     Ok(())
@@ -192,22 +196,23 @@ unsafe extern "C" fn raw_callback(
     _proxy: CGEventTapProxy,
     event_type: CGEventType,
     cg_event: CGEventRef,
-    _user_info: *mut c_void,
+    user_info: *mut c_void,
 ) -> CGEventRef {
-    if let Some(event) = convert_event(event_type, &cg_event) {
-        if let Some(callback) = addr_of_mut!(GLOBAL_CALLBACK)
-            .as_mut()
-            .and_then(|c| c.as_mut())
-        {
-            callback(event);
-        }
+    let Some(state) = (user_info as *mut EventTapState).as_mut() else {
+        return cg_event;
+    };
+
+    if let Some(event) = convert_event(event_type, &cg_event, &mut state.pressed_modifiers) {
+        (state.callback)(event);
     }
     cg_event
 }
 
-static mut LAST_FLAGS: CGEventFlags = CGEventFlags::CGEventFlagNull;
-
-unsafe fn convert_event(cg_event_type: CGEventType, cg_event: &CGEvent) -> Option<KeyEvent> {
+unsafe fn convert_event(
+    cg_event_type: CGEventType,
+    cg_event: &CGEvent,
+    pressed_modifiers: &mut HashSet<CGKeyCode>,
+) -> Option<KeyEvent> {
     let code = cg_event
         .get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE)
         .try_into()
@@ -216,20 +221,68 @@ unsafe fn convert_event(cg_event_type: CGEventType, cg_event: &CGEvent) -> Optio
     let event = match cg_event_type {
         CGEventType::KeyDown => KeyEvent::KeyPress(key_from_code(code)),
         CGEventType::KeyUp => KeyEvent::KeyRelease(key_from_code(code)),
-        CGEventType::FlagsChanged => {
-            let new_flags = cg_event.get_flags();
-
-            let is_relese = new_flags < LAST_FLAGS;
-            LAST_FLAGS = new_flags;
-
-            if is_relese {
-                KeyEvent::KeyRelease(key_from_code(code))
-            } else {
-                KeyEvent::KeyPress(key_from_code(code))
-            }
-        }
+        CGEventType::FlagsChanged => convert_modifier_event(code, pressed_modifiers)?,
         _ => return None,
     };
 
     Some(event)
+}
+
+fn convert_modifier_event(
+    code: CGKeyCode,
+    pressed_modifiers: &mut HashSet<CGKeyCode>,
+) -> Option<KeyEvent> {
+    let key = modifier_key_from_code(code)?;
+
+    if pressed_modifiers.remove(&code) {
+        Some(KeyEvent::KeyRelease(key))
+    } else {
+        pressed_modifiers.insert(code);
+        Some(KeyEvent::KeyPress(key))
+    }
+}
+
+fn modifier_key_from_code(code: CGKeyCode) -> Option<Key> {
+    match code {
+        54..=63 => Some(key_from_code(code)),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::{convert_modifier_event, Key, KeyEvent};
+
+    #[test]
+    fn modifier_events_track_left_and_right_keys_independently() {
+        let mut pressed_modifiers = HashSet::new();
+
+        assert_eq!(
+            convert_modifier_event(56, &mut pressed_modifiers),
+            Some(KeyEvent::KeyPress(Key::ShiftLeft))
+        );
+        assert_eq!(
+            convert_modifier_event(60, &mut pressed_modifiers),
+            Some(KeyEvent::KeyPress(Key::ShiftRight))
+        );
+        assert_eq!(
+            convert_modifier_event(56, &mut pressed_modifiers),
+            Some(KeyEvent::KeyRelease(Key::ShiftLeft))
+        );
+        assert_eq!(
+            convert_modifier_event(60, &mut pressed_modifiers),
+            Some(KeyEvent::KeyRelease(Key::ShiftRight))
+        );
+        assert!(pressed_modifiers.is_empty());
+    }
+
+    #[test]
+    fn modifier_events_ignore_non_modifier_keycodes() {
+        let mut pressed_modifiers = HashSet::new();
+
+        assert_eq!(convert_modifier_event(0, &mut pressed_modifiers), None);
+        assert!(pressed_modifiers.is_empty());
+    }
 }

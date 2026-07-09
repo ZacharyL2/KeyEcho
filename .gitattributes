@@ -1,0 +1,6 @@
+# Keep GitHub language stats focused on TypeScript and Rust.
+* linguist-vendored
+
+*.rs -linguist-vendored linguist-detectable=true
+*.ts -linguist-vendored linguist-detectable=true
+*.tsx -linguist-vendored linguist-detectable=true

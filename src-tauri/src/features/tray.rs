@@ -1,9 +1,12 @@
 use std::str::FromStr;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use strum::{AsRefStr, Display, EnumString};
 use tauri::{
-    api, AppHandle, CustomMenuItem, Manager, SystemTrayEvent, SystemTrayMenu, SystemTrayMenuItem,
+    image::Image,
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle,
 };
 
 use crate::commands::exit_app;
@@ -18,52 +21,99 @@ enum MenuItemId {
     AppVersion,
 }
 
+#[cfg(target_os = "macos")]
+fn tray_icon(_: &AppHandle) -> Result<Image<'static>> {
+    Image::from_bytes(include_bytes!("../../icons/tray-template.png"))
+        .context("error when loading macOS tray template icon")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn tray_icon(app_handle: &AppHandle) -> Result<Image<'_>> {
+    app_handle
+        .default_window_icon()
+        .context("error when loading default tray icon")
+        .cloned()
+}
+
 pub fn init_tray(app_handle: &AppHandle) -> Result<()> {
     let package_info = app_handle.package_info();
 
-    let tray = app_handle.tray_handle();
-
-    tray.set_menu(
-        SystemTrayMenu::new()
-            .add_item(CustomMenuItem::new(
-                MenuItemId::DisplayDashboard.as_ref(),
-                WindowLabel::Dashboard.as_ref(),
-            ))
-            .add_native_item(SystemTrayMenuItem::Separator)
-            .add_item(
-                CustomMenuItem::new(
-                    MenuItemId::AppVersion.as_ref(),
-                    format!("Version {}", package_info.version.to_string()),
-                )
-                .disabled(),
-            )
-            .add_item(CustomMenuItem::new(MenuItemId::Restart.as_ref(), "Restart"))
-            .add_item(CustomMenuItem::new(MenuItemId::Quit.as_ref(), "Quit")),
+    let display_dashboard = MenuItem::with_id(
+        app_handle,
+        MenuItemId::DisplayDashboard.as_ref(),
+        WindowLabel::Dashboard.as_ref(),
+        true,
+        None::<&str>,
+    )?;
+    let separator = PredefinedMenuItem::separator(app_handle)?;
+    let app_version = MenuItem::with_id(
+        app_handle,
+        MenuItemId::AppVersion.as_ref(),
+        format!("Version {}", package_info.version),
+        false,
+        None::<&str>,
+    )?;
+    let restart = MenuItem::with_id(
+        app_handle,
+        MenuItemId::Restart.as_ref(),
+        "Restart",
+        true,
+        None::<&str>,
+    )?;
+    let quit = MenuItem::with_id(
+        app_handle,
+        MenuItemId::Quit.as_ref(),
+        "Quit",
+        true,
+        None::<&str>,
     )?;
 
-    tray.set_tooltip(&package_info.name)?;
+    let menu = Menu::with_items(
+        app_handle,
+        &[
+            &display_dashboard,
+            &separator,
+            &app_version,
+            &restart,
+            &quit,
+        ],
+    )?;
 
-    Ok(())
-}
+    let icon = tray_icon(app_handle)?;
 
-pub fn on_system_tray_event(app_handle: &AppHandle, event: SystemTrayEvent) {
-    let display_dashboard = || {
-        let _ = show_dashboard(app_handle);
-    };
+    let tray_builder = TrayIconBuilder::with_id("main")
+        .icon(icon)
+        .tooltip(&package_info.name)
+        .menu(&menu)
+        .show_menu_on_left_click(false);
 
-    match event {
-        #[cfg(not(target_os = "macos"))]
-        SystemTrayEvent::LeftClick { .. } => display_dashboard(),
-        SystemTrayEvent::MenuItemClick { id, .. } => {
-            if let Ok(menu_item) = MenuItemId::from_str(id.as_str()) {
+    #[cfg(target_os = "macos")]
+    let tray_builder = tray_builder.icon_as_template(true);
+
+    tray_builder
+        .on_menu_event(|app_handle, event| {
+            if let Ok(menu_item) = MenuItemId::from_str(event.id().as_ref()) {
                 match menu_item {
-                    MenuItemId::DisplayDashboard => display_dashboard(),
-                    MenuItemId::Restart => api::process::restart(&app_handle.env()),
+                    MenuItemId::DisplayDashboard => {
+                        let _ = show_dashboard(app_handle);
+                    }
+                    MenuItemId::Restart => app_handle.restart(),
                     MenuItemId::Quit => exit_app(app_handle.clone()),
-                    _ => {}
+                    MenuItemId::AppVersion => {}
                 }
             }
-        }
-        _ => {}
-    }
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let _ = show_dashboard(tray.app_handle());
+            }
+        })
+        .build(app_handle)?;
+
+    Ok(())
 }
