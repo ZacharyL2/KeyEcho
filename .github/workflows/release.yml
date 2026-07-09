@@ -2,33 +2,155 @@ name: Release Build
 
 on:
   workflow_dispatch:
-permissions: write-all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-build-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_INCREMENTAL: 0
+  CI: true
   RUST_BACKTRACE: short
 
 jobs:
+  validate-release-ref:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require main branch
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "main" ]; then
+            echo "Release Build must be run from main, got ${GITHUB_REF_NAME}."
+            exit 1
+          fi
+
+  verify:
+    needs: validate-release-ref
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: Install Linux Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            pkg-config \
+            wget
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Tests
+        run: pnpm test
+
+  verify-platforms:
+    needs: validate-release-ref
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Tests
+        run: pnpm test
+
   release:
+    needs: [verify, verify-platforms]
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2025
             target: x86_64-pc-windows-msvc
-          - os: windows-latest
+            files: |
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.nsis.zip
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.nsis.zip.sig
+          - os: windows-2025
             target: aarch64-pc-windows-msvc
+            files: |
+              src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*.exe
+              src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*.nsis.zip
+              src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*.nsis.zip.sig
           - os: macos-latest
             target: aarch64-apple-darwin
+            updaterArch: aarch64
+            files: |
+              src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+              src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
+              src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
           - os: macos-latest
             target: x86_64-apple-darwin
+            updaterArch: x64
+            files: |
+              src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
+              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
 
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@1.77.0
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Add Rust Target
         run: rustup target add ${{ matrix.target }}
@@ -38,65 +160,411 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
       - name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
-      - uses: pnpm/action-setup@v4
-        name: Install with pnpm
-        with:
-          run_install: true
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
 
-      - name: Tauri build
-        uses: tauri-apps/tauri-action@v0
+      - name: Get Version
+        shell: bash
+        run: |
+          VERSION="$(node -e "const fs = require('fs'); const text = fs.readFileSync('src-tauri/Cargo.toml', 'utf8'); console.log(text.match(/^version = \"([^\"]+)\"/m)[1]);")"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Import Developer ID certificate
+        if: runner.os == 'macOS'
         env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          if ! printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12 2>/dev/null; then
+            printf '%s' "$APPLE_CERTIFICATE" | base64 -D > certificate.p12
+          fi
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security import certificate.p12 \
+            -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            build.keychain
+          security find-identity -v -p codesigning build.keychain | grep "Developer ID Application: WaveApp LLC"
+
+      - name: Install Azure Artifact Signing CLI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $source = Join-Path $env:RUNNER_TEMP "artifact-signing-cli"
+          git clone https://github.com/Levminer/artifact-signing-cli $source
+          git -C $source checkout c586ee822d368d1a6b6c924eb2b5403b568d0473
+
+          $main = Join-Path $source "src\main.rs"
+          $content = Get-Content $main -Raw
+          $old = @'
+                  "-p",
+                  args.azure_client_secret
+          '@
+          $new = @'
+                  format!("--password={}", args.azure_client_secret)
+          '@
+          if (-not $content.Contains($old)) {
+            throw "Artifact Signing CLI Azure login patch target was not found."
+          }
+          $content.Replace($old, $new) | Set-Content $main -Encoding utf8
+
+          cargo install --locked --path $source
+          "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Check Azure Artifact Signing CLI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $signer = Join-Path $env:USERPROFILE ".cargo\bin\artifact-signing-cli.exe"
+          if (-not (Test-Path $signer)) {
+            throw "Missing Artifact Signing CLI at $signer"
+          }
+          & $signer --help
+
+      - name: Create Windows signing config
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $signer = Join-Path $env:USERPROFILE ".cargo\bin\artifact-signing-cli.exe"
+          if (-not (Test-Path $signer)) {
+            throw "Missing Artifact Signing CLI at $signer"
+          }
+
+          $signScript = Join-Path $env:RUNNER_TEMP "keyecho-windows-sign.ps1"
+          $signScriptLines = @(
+            '$ErrorActionPreference = "Stop"',
+            '',
+            '$file = $args[0]',
+            'if (-not (Test-Path $file)) {',
+            '  throw "Missing file to sign: $file"',
+            '}',
+            '',
+            '$signer = Join-Path $env:USERPROFILE ".cargo\bin\artifact-signing-cli.exe"',
+            'if (-not (Test-Path $signer)) {',
+            '  throw "Missing Artifact Signing CLI at $signer"',
+            '}',
+            '',
+            '$endpoint = $env:AZURE_CODESIGN_ENDPOINT.Trim()',
+            '$account = $env:AZURE_CODESIGN_ACCOUNT_NAME.Trim()',
+            '$profile = $env:AZURE_CODESIGN_CERT_PROFILE_NAME.Trim()',
+            '',
+            'Write-Host "Signing $file with Azure Artifact Signing profile $profile"',
+            '& $signer -e $endpoint -a $account -c $profile -d "KeyEcho" $file',
+            'if ($LASTEXITCODE -ne 0) {',
+            '  throw "Artifact Signing CLI failed with exit code $LASTEXITCODE"',
+            '}'
+          )
+          $signScriptLines | Set-Content $signScript -Encoding utf8
+
+          $signCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File $signScript %1"
+          $config = @{
+            bundle = @{
+              windows = @{
+                signCommand = $signCommand
+              }
+            }
+          } | ConvertTo-Json -Depth 6
+          $config | Set-Content "src-tauri/tauri.windows.release-signing.conf.json" -Encoding utf8
+
+      - name: Preflight Azure Artifact Signing
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CODESIGN_ENDPOINT: ${{ secrets.AZURE_CODESIGN_ENDPOINT }}
+          AZURE_CODESIGN_ACCOUNT_NAME: ${{ secrets.AZURE_CODESIGN_ACCOUNT_NAME }}
+          AZURE_CODESIGN_CERT_PROFILE_NAME: ${{ secrets.AZURE_CODESIGN_CERT_PROFILE_NAME }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $signer = Join-Path $env:USERPROFILE ".cargo\bin\artifact-signing-cli.exe"
+          if (-not (Test-Path $signer)) {
+            throw "Missing Artifact Signing CLI at $signer"
+          }
+
+          $testExe = Join-Path $env:RUNNER_TEMP "keyecho-signing-preflight.exe"
+          Copy-Item "$env:SystemRoot\System32\where.exe" $testExe -Force
+
+          $endpoint = $env:AZURE_CODESIGN_ENDPOINT.Trim()
+          $account = $env:AZURE_CODESIGN_ACCOUNT_NAME.Trim()
+          $profile = $env:AZURE_CODESIGN_CERT_PROFILE_NAME.Trim()
+
+          Write-Host "Running Azure Artifact Signing preflight for profile $profile"
+          & $signer -e $endpoint -a $account -c $profile -d "KeyEcho signing preflight" $testExe
+          if ($LASTEXITCODE -ne 0) {
+            throw "Artifact Signing CLI preflight failed with exit code $LASTEXITCODE"
+          }
+
+          $signature = Get-AuthenticodeSignature $testExe
+          $signature | Format-List
+          if ($signature.Status -ne "Valid") {
+            throw "Preflight signature status is $($signature.Status)"
+          }
+
+      - name: Build, sign, and notarize macOS bundles
+        if: runner.os == 'macOS'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: 'Developer ID Application: WaveApp LLC (8VFAY2H953)'
           NODE_OPTIONS: --max_old_space_size=4096
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY || secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || secrets.TAURI_KEY_PASSWORD }}
+        run: pnpm tauri build --target ${{ matrix.target }} --ci
+
+      - name: Notarize and staple macOS DMGs
+        if: runner.os == 'macOS'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          shopt -s nullglob
+          dmg_paths=(src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
+          if [ ${#dmg_paths[@]} -eq 0 ]; then
+            echo "No DMG files found to notarize."
+            exit 1
+          fi
+
+          for dmg_path in "${dmg_paths[@]}"; do
+            echo "Submitting $dmg_path to Apple notarization"
+            xcrun notarytool submit "$dmg_path" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait
+
+            xcrun stapler staple "$dmg_path"
+            xcrun stapler validate "$dmg_path"
+          done
+
+      - name: Verify macOS signature and notarization
+        if: runner.os == 'macOS'
+        run: |
+          app_path="src-tauri/target/${{ matrix.target }}/release/bundle/macos/KeyEcho.app"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          xcrun stapler validate "$app_path"
+          spctl --assess --type execute --verbose=4 "$app_path"
+
+          shopt -s nullglob
+          dmg_paths=(src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
+          if [ ${#dmg_paths[@]} -eq 0 ]; then
+            echo "No DMG files found to verify."
+            exit 1
+          fi
+
+          for dmg_path in "${dmg_paths[@]}"; do
+            codesign --verify --strict --verbose=2 "$dmg_path"
+            xcrun stapler validate "$dmg_path"
+            spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
+          done
+
+      - name: Build signed Windows bundles
+        if: runner.os == 'Windows'
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CODESIGN_ENDPOINT: ${{ secrets.AZURE_CODESIGN_ENDPOINT }}
+          AZURE_CODESIGN_ACCOUNT_NAME: ${{ secrets.AZURE_CODESIGN_ACCOUNT_NAME }}
+          AZURE_CODESIGN_CERT_PROFILE_NAME: ${{ secrets.AZURE_CODESIGN_CERT_PROFILE_NAME }}
+          NODE_OPTIONS: --max_old_space_size=4096
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY || secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || secrets.TAURI_KEY_PASSWORD }}
+        run: pnpm tauri build --target ${{ matrix.target }} --config src-tauri/tauri.windows.release-signing.conf.json --ci
+
+      - name: Collect Windows installers to verify
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $catalog = Join-Path $env:GITHUB_WORKSPACE "artifact-signing-files.txt"
+          $paths = New-Object System.Collections.Generic.List[string]
+
+          $nsisDir = Join-Path $env:GITHUB_WORKSPACE "src-tauri\target\${{ matrix.target }}\release\bundle\nsis"
+          if (Test-Path $nsisDir) {
+            Get-ChildItem $nsisDir -Filter *.exe | ForEach-Object {
+              $relative = $_.FullName.Substring($env:GITHUB_WORKSPACE.Length + 1).Replace('\', '/')
+              $paths.Add($relative)
+            }
+          }
+
+          $uniquePaths = $paths | Sort-Object -Unique
+          if (-not $uniquePaths) {
+            throw "No Windows NSIS installers found to verify."
+          }
+
+          $uniquePaths | Set-Content $catalog
+          Get-Content $catalog
+
+      - name: Verify Windows signatures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Get-Content (Join-Path $env:GITHUB_WORKSPACE "artifact-signing-files.txt") | ForEach-Object {
+            $fullPath = Join-Path $env:GITHUB_WORKSPACE ($_ -replace '/', '\')
+            $signature = Get-AuthenticodeSignature $fullPath
+            Write-Host "${_}: $($signature.Status) - $($signature.SignerCertificate.Subject)"
+            if ($signature.Status -ne "Valid") {
+              throw "Invalid signature: $fullPath"
+            }
+          }
+
+      - name: Report Windows app executable signature
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($binaryName in @("keyecho.exe", "KeyEcho.exe")) {
+            $relative = "src-tauri/target/${{ matrix.target }}/release/$binaryName"
+            $fullPath = Join-Path $env:GITHUB_WORKSPACE ($relative -replace '/', '\')
+            if (Test-Path $fullPath) {
+              $signature = Get-AuthenticodeSignature $fullPath
+              Write-Host "${relative}: $($signature.Status) - $($signature.SignerCertificate.Subject)"
+            }
+          }
+
+      - name: Rename macOS updater artifact
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          DIR="src-tauri/target/${{ matrix.target }}/release/bundle/macos"
+          mv "${DIR}/KeyEcho.app.tar.gz" "${DIR}/KeyEcho_${{ matrix.updaterArch }}.app.tar.gz"
+          mv "${DIR}/KeyEcho.app.tar.gz.sig" "${DIR}/KeyEcho_${{ matrix.updaterArch }}.app.tar.gz.sig"
+
+      - name: Upload Release
+        uses: softprops/action-gh-release@v3
         with:
-          tagName: v__VERSION__
-          releaseName: KeyEcho v__VERSION__
-          tauriScript: pnpm
-          args: --target ${{ matrix.target }}
+          tag_name: v${{ env.VERSION }}
+          name: 'KeyEcho v${{ env.VERSION }}'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fail_on_unmatched_files: true
+          files: ${{ matrix.files }}
 
   release-for-linux:
+    needs: [verify, verify-platforms]
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-          - os: ubuntu-latest
+            buildMode: docker
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-          - os: ubuntu-latest
-            target: armv7-unknown-linux-gnueabihf
+            buildMode: native
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Build for Linux
+      - name: Build for Linux x86_64
+        if: matrix.buildMode == 'docker'
         uses: ./.github/build-for-linux
         env:
           NODE_OPTIONS: --max_old_space_size=4096
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY || secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || secrets.TAURI_KEY_PASSWORD }}
         with:
           target: ${{ matrix.target }}
 
+      - name: Install Rust Stable
+        if: matrix.buildMode == 'native'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust Cache
+        if: matrix.buildMode == 'native'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install pnpm
+        if: matrix.buildMode == 'native'
+        uses: pnpm/action-setup@v6
+
+      - name: Install Node
+        if: matrix.buildMode == 'native'
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Build for Linux ARM64
+        if: matrix.buildMode == 'native'
+        env:
+          NODE_OPTIONS: --max_old_space_size=4096
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY || secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || secrets.TAURI_KEY_PASSWORD }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            curl \
+            file \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            pkg-config \
+            rpm \
+            wget \
+            xdg-utils \
+            xz-utils
+          sudo apt-get install -y --no-install-recommends libfuse2 || sudo apt-get install -y --no-install-recommends libfuse2t64
+          pnpm install --frozen-lockfile
+          pnpm build --target ${{ matrix.target }}
+
       - name: Get Version
         run: |
-          cargo install toml-cli
-          echo "VERSION=$(toml get src-tauri/Cargo.toml package.version | tr -d '"')" >> $GITHUB_ENV
+          VERSION="$(node -e "const fs = require('fs'); const text = fs.readFileSync('src-tauri/Cargo.toml', 'utf8'); console.log(text.match(/^version = \"([^\"]+)\"/m)[1]);")"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Upload Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{env.VERSION}}
           name: 'KeyEcho v${{env.VERSION}}'
           token: ${{ secrets.GITHUB_TOKEN }}
+          fail_on_unmatched_files: true
           files: |
             src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
@@ -104,19 +572,24 @@ jobs:
   release-update:
     runs-on: ubuntu-latest
     needs: [release, release-for-linux]
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
 
       - name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
-      - uses: pnpm/action-setup@v4
-        name: Install with pnpm
-        with:
-          run_install: true
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Release updater file
         run: pnpm updater

@@ -1,109 +1,195 @@
-use anyhow::Result;
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc,
+    },
+};
+
+use anyhow::{ensure, Result};
+use arc_swap::ArcSwapOption;
 use serde::{Deserialize, Serialize};
-use strum::{AsRefStr, Display, EnumString};
-use tauri::{AppHandle, Wry};
-use tauri_plugin_store::{Store, StoreBuilder};
+use tauri::{AppHandle, Manager};
 
 mod decoder;
 mod sound;
 
-pub(self) use decoder::SoundDecoder;
+use decoder::SoundDecoder;
 
-use super::{listen_key::KeyEvent, AudioSource};
+use super::{listen_key::Key, AudioSource};
 use sound::KeySound;
 
-#[derive(EnumString, Serialize, AsRefStr, Display, PartialEq, Debug)]
-#[strum(serialize_all = "camelCase")]
-enum ConfigKey {
-    Volume,
-    Sounds,
-    CurrentSound,
-}
-
-#[derive(Debug, specta::Type, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SoundOption {
     pub name: String,
     pub value: String, // the sound dir
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SoundpackConfig {
+    #[serde(default = "default_volume")]
+    volume: f32,
+    #[serde(default)]
+    sounds: Vec<SoundOption>,
+    #[serde(default)]
+    current_sound: Option<String>,
+}
+
+impl Default for SoundpackConfig {
+    fn default() -> Self {
+        Self {
+            volume: default_volume(),
+            sounds: Vec::new(),
+            current_sound: None,
+        }
+    }
+}
+
+impl SoundpackConfig {
+    fn load(path: &PathBuf) -> Self {
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|content| serde_json::from_str(&content).ok())
+            .unwrap_or_default()
+    }
+
+    fn save(&self, path: &PathBuf) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        fs::write(path, serde_json::to_vec_pretty(self)?)?;
+        Ok(())
+    }
+}
+
+fn default_volume() -> f32 {
+    1.0
+}
+
+fn normalize_volume(volume: f32) -> Result<f32> {
+    ensure!(volume.is_finite(), "volume must be finite");
+    Ok(volume.clamp(0.0, 1.0))
+}
+
+#[derive(Clone)]
+pub(crate) struct PlaybackSoundpack {
+    current_sound: Arc<ArcSwapOption<KeySound>>,
+    volume_bits: Arc<AtomicU32>,
+}
+
+impl PlaybackSoundpack {
+    fn new(current_sound: Option<Arc<KeySound>>, volume: f32) -> Self {
+        Self {
+            current_sound: Arc::new(ArcSwapOption::new(current_sound)),
+            volume_bits: Arc::new(AtomicU32::new(volume.to_bits())),
+        }
+    }
+
+    fn set_current_sound(&self, current_sound: Option<Arc<KeySound>>) {
+        self.current_sound.store(current_sound);
+    }
+
+    fn set_volume(&self, volume: f32) {
+        self.volume_bits.store(volume.to_bits(), Ordering::Relaxed);
+    }
+
+    pub(super) fn source_for_key(&self, key: Key) -> Option<(AudioSource, f32)> {
+        let current_sound = self.current_sound.load();
+        let source = current_sound.as_ref()?.key_source(key)?;
+        let volume = f32::from_bits(self.volume_bits.load(Ordering::Relaxed));
+        Some((source, volume))
+    }
+}
+
 pub struct KeySoundpack {
     pub volume: f32,
     pub sounds: Vec<SoundOption>,
-    current_sound: Option<KeySound>,
-    // todo replace store plugin with custom store
-    persistence: Store<Wry>,
+    current_sound: Option<Arc<KeySound>>,
+    playback: PlaybackSoundpack,
+    config_path: PathBuf,
 }
 
 impl KeySoundpack {
-    pub fn try_load(handle: AppHandle) -> Result<Self> {
-        let mut persistence = StoreBuilder::new(handle, "soundpack.config.json".parse()?).build();
-        let _ = persistence.load();
-
-        let sounds = persistence
-            .get(ConfigKey::Sounds)
-            .and_then(|val| serde_json::from_value::<Vec<SoundOption>>(val.clone()).ok())
-            .unwrap_or_default();
-
-        let volume = persistence
-            .get(ConfigKey::Volume)
-            .and_then(|val| val.as_f64().map(|v| v as f32))
-            .unwrap_or(1.0);
-
-        let current_sound = persistence
-            .get(ConfigKey::CurrentSound)
-            .and_then(|val| val.as_str())
-            .and_then(|sound| KeySound::new(sound).ok());
+    pub fn try_load(handle: &AppHandle) -> Result<Self> {
+        let config_path = handle.path().app_data_dir()?.join("soundpack.config.json");
+        let config = SoundpackConfig::load(&config_path);
+        let volume = normalize_volume(config.volume).unwrap_or_else(|_| default_volume());
+        let current_sound = config
+            .current_sound
+            .as_deref()
+            .and_then(|sound| KeySound::new(sound).ok())
+            .map(Arc::new);
+        let playback = PlaybackSoundpack::new(current_sound.clone(), volume);
 
         Ok(KeySoundpack {
             volume,
-            sounds,
+            sounds: config.sounds,
             current_sound,
-            persistence,
+            playback,
+            config_path,
         })
+    }
+
+    pub fn playback(&self) -> PlaybackSoundpack {
+        self.playback.clone()
     }
 
     pub fn selected_sound(&self) -> Option<String> {
         self.current_sound.as_ref().map(|s| s.name.clone())
     }
 
-    pub fn key_source(&mut self, key_evt: KeyEvent) -> Option<AudioSource> {
-        self.current_sound
-            .as_mut()
-            .and_then(|s| s.key_source(key_evt))
-    }
-
     pub fn update_volume(&mut self, volume: f32) -> Result<()> {
+        let volume = normalize_volume(volume)?;
         self.volume = volume;
-        self.persistence
-            .insert(ConfigKey::Volume.to_string(), volume.into())?;
-        self.persistence.save()?;
-
-        Ok(())
+        self.playback.set_volume(volume);
+        self.save_config()
     }
 
     pub fn select_sound(&mut self, sound: String) -> Result<()> {
-        self.current_sound.replace(KeySound::new(&sound)?);
-
-        self.persistence.insert(
-            ConfigKey::CurrentSound.to_string(),
-            serde_json::to_value(&sound)?,
-        )?;
-        self.persistence.save()?;
-
-        Ok(())
+        let current_sound = Arc::new(KeySound::new(&sound)?);
+        self.playback
+            .set_current_sound(Some(Arc::clone(&current_sound)));
+        self.current_sound.replace(current_sound);
+        self.save_config()
     }
 
     pub fn insert_sound(&mut self, sound: SoundOption) -> Result<()> {
         if !self.sounds.iter().any(|i| i.name == sound.name) {
             self.sounds.push(sound);
-
-            self.persistence.insert(
-                ConfigKey::Sounds.to_string(),
-                serde_json::to_value(&self.sounds)?,
-            )?;
-            self.persistence.save()?;
+            self.save_config()?;
         };
 
         Ok(())
+    }
+
+    fn save_config(&self) -> Result<()> {
+        SoundpackConfig {
+            volume: self.volume,
+            sounds: self.sounds.clone(),
+            current_sound: self.selected_sound(),
+        }
+        .save(&self.config_path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_volume;
+
+    #[test]
+    fn normalize_volume_clamps_to_supported_range() {
+        assert_eq!(normalize_volume(-0.5).expect("valid volume"), 0.0);
+        assert_eq!(normalize_volume(0.4).expect("valid volume"), 0.4);
+        assert_eq!(normalize_volume(1.5).expect("valid volume"), 1.0);
+    }
+
+    #[test]
+    fn normalize_volume_rejects_non_finite_values() {
+        assert!(normalize_volume(f32::NAN).is_err());
+        assert!(normalize_volume(f32::INFINITY).is_err());
+        assert!(normalize_volume(f32::NEG_INFINITY).is_err());
     }
 }

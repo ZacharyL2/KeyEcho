@@ -2,9 +2,8 @@ use std::{error::Error, fmt};
 
 use anyhow::Error as AnyhowError;
 use serde::Serialize;
-use specta::Type;
 
-#[derive(Debug, Serialize, Type)]
+#[derive(Debug, Serialize)]
 pub struct GeneralError(String);
 
 macro_rules! impl_from_error {
@@ -27,7 +26,7 @@ impl fmt::Display for GeneralError {
 
 impl Error for GeneralError {}
 
-impl_from_error!(AnyhowError, tauri::api::Error);
+impl_from_error!(AnyhowError, tauri::Error);
 
 // pub fn to_anyhow<E>(err: E) -> anyhow::Error
 // where
