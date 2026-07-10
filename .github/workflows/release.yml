@@ -179,6 +179,10 @@ jobs:
           VERSION="$(node -e "const fs = require('fs'); const text = fs.readFileSync('src-tauri/Cargo.toml', 'utf8'); console.log(text.match(/^version = \"([^\"]+)\"/m)[1]);")"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
+      - name: Prepare Release Notes
+        shell: bash
+        run: pnpm run release-notes -- --tag "v${VERSION}" --out release-notes.md
+
       - name: Import Developer ID certificate
         if: runner.os == 'macOS'
         env:
@@ -467,6 +471,7 @@ jobs:
         with:
           tag_name: v${{ env.VERSION }}
           name: 'KeyEcho v${{ env.VERSION }}'
+          body_path: release-notes.md
           token: ${{ secrets.GITHUB_TOKEN }}
           fail_on_unmatched_files: true
           files: ${{ matrix.files }}
@@ -513,11 +518,9 @@ jobs:
           workspaces: src-tauri
 
       - name: Install pnpm
-        if: matrix.buildMode == 'native'
         uses: pnpm/action-setup@v6
 
       - name: Install Node
-        if: matrix.buildMode == 'native'
         uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -558,11 +561,20 @@ jobs:
           VERSION="$(node -e "const fs = require('fs'); const text = fs.readFileSync('src-tauri/Cargo.toml', 'utf8'); console.log(text.match(/^version = \"([^\"]+)\"/m)[1]);")"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
+      - name: Install Release Note Dependencies
+        if: matrix.buildMode == 'docker'
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare Release Notes
+        shell: bash
+        run: pnpm run release-notes -- --tag "v${VERSION}" --out release-notes.md
+
       - name: Upload Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{env.VERSION}}
           name: 'KeyEcho v${{env.VERSION}}'
+          body_path: release-notes.md
           token: ${{ secrets.GITHUB_TOKEN }}
           fail_on_unmatched_files: true
           files: |

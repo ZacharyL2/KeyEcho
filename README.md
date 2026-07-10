@@ -53,7 +53,7 @@ Supported targets:
 
 - Windows x64 / ARM64
 - macOS Intel / Apple Silicon
-- Linux x64 / ARM64 / ARMv7
+- Linux x64 / ARM64
 
 KeyEcho needs the operating system permissions required for global keyboard
 event listening. It maps key events to local sound playback; it does not upload
