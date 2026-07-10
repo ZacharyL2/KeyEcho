@@ -21,7 +21,6 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
-    "@tauri-apps/plugin-autostart": "^2.5.1",
     "solid-js": "^1.9.13",
     "valibot": "^1.4.1"
   },

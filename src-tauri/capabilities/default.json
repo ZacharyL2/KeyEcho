@@ -3,10 +3,5 @@
   "identifier": "default",
   "description": "Default permissions for the KeyEcho settings window.",
   "windows": ["Dashboard"],
-  "permissions": [
-    "core:default",
-    "autostart:allow-enable",
-    "autostart:allow-disable",
-    "autostart:allow-is-enabled"
-  ]
+  "permissions": ["core:default"]
 }

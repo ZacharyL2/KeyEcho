@@ -1,4 +1,3 @@
-import { disable, enable, isEnabled } from '@tauri-apps/plugin-autostart';
 import type { JSX } from 'solid-js';
 import {
   createEffect,
@@ -239,7 +238,7 @@ function AutoLaunchSetting(props: { notify: Notify }) {
   const refresh = async () => {
     setLoading(true);
     try {
-      setEnabled(await isEnabled());
+      setEnabled(unwrapCommand(await commands.isAutoLaunchEnabled()));
     } catch (error) {
       props.notify(`Auto launch status failed. Reason: ${error}`, 'error');
     } finally {
@@ -253,8 +252,8 @@ function AutoLaunchSetting(props: { notify: Notify }) {
     setLoading(true);
 
     try {
-      await (checked ? enable() : disable());
-      setEnabled(await isEnabled());
+      unwrapCommand(await commands.setAutoLaunch(checked));
+      setEnabled(unwrapCommand(await commands.isAutoLaunchEnabled()));
       props.notify(
         `Auto launch ${checked ? 'enabled' : 'disabled'} successfully.`,
       );

@@ -29,6 +29,14 @@ async function callCommand<T>(
 }
 
 export const commands = {
+  isAutoLaunchEnabled() {
+    return callCommand<boolean>('is_auto_launch_enabled');
+  },
+
+  setAutoLaunch(enabled: boolean) {
+    return callCommand<null>('set_auto_launch', { enabled });
+  },
+
   downloadSound(url: string) {
     return callCommand<null>('download_sound', { url });
   },

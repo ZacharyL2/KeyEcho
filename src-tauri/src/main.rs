@@ -12,6 +12,7 @@ use commands::{
     download_sound, exit_app, get_selected_sound, get_sounds, get_volume, open_external_url,
     select_sound, update_volume,
 };
+use features::autostart::{is_auto_launch_enabled, set_auto_launch};
 
 fn main() {
     let context = tauri::generate_context!();
@@ -34,8 +35,17 @@ fn main() {
             update_volume,
             open_external_url,
             exit_app,
+            is_auto_launch_enabled,
+            set_auto_launch,
         ])
-        .setup(|app| Ok(setup::resolve_setup(app)?))
+        .setup(|app| {
+            #[cfg(target_os = "macos")]
+            if let Err(error) = features::autostart::ensure_attribution(app.handle()) {
+                eprintln!("failed to attribute KeyEcho's launch agent: {error}");
+            }
+
+            Ok(setup::resolve_setup(app)?)
+        })
         .build(context)
         .expect("error while building tauri application");
 
