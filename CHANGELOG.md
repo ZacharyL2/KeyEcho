@@ -7,7 +7,7 @@
 - Migrate the desktop app to Tauri 2 and SolidJS, replacing the Vue dashboard with a smaller Solid + UnoCSS settings window
 - Rework the dashboard into a compact app card with clearer sound pack selection, pack browsing, volume, auto launch, and project update controls
 - Add readable display names for bundled and downloaded sound packs
-- Add a v1.0.0 project update card that links users to the KeyEcho sound pack vote and founding bundle pages
+- Add a v1.0.0 project update card that links users to the KeyEcho sound pack vote
 - Add Tauri 2 capability configuration and refreshed command bindings between the frontend and Rust backend
 - Replace the app and tray icon set with a new KeyEcho-specific design
 - Add performance documentation for the audio hot path and sound pack memory budget
