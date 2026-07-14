@@ -9,12 +9,13 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const PACK_NAME = 'model-m-bucklespring-local-test';
 const CLIP_DURATION_MS = 95;
 
-const keyToScanCode: Record<string, string> = {
+export const keyToScanCode: Record<string, string> = {
   Alt: '38',
   AltGr: '61',
   Backspace: '0e',
@@ -284,4 +285,9 @@ function main(): void {
   console.log('Quit KeyEcho, then run `pnpm dev` to try it.');
 }
 
-main();
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main();
+}
