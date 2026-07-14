@@ -116,6 +116,7 @@ pub enum Key {
 pub enum KeyEvent {
     KeyPress(Key),
     KeyRelease(Key),
+    Reset,
 }
 
 #[allow(dead_code)]
@@ -125,9 +126,7 @@ pub enum ListenError {
     LoopSource,
 
     MissingDisplay,
-    RecordContextEnabling,
-    RecordContext,
-    XRecordExtension,
+    XInputExtension,
 
     KeyHook(u32),
 }

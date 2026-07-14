@@ -22,6 +22,10 @@ impl KeyPressGate {
             KeyEvent::KeyPress(_) => None,
             KeyEvent::KeyRelease(key) if self.depressed.remove(&key) => Some(evt),
             KeyEvent::KeyRelease(_) => None,
+            KeyEvent::Reset => {
+                self.depressed.clear();
+                None
+            }
         }
     }
 }
@@ -85,6 +89,15 @@ mod tests {
         );
         assert_eq!(gate.event_to_play(KeyEvent::KeyPress(Key::KeyA)), None);
         assert_eq!(gate.event_to_play(KeyEvent::KeyPress(Key::KeyB)), None);
+    }
+
+    #[test]
+    fn key_press_gate_recovers_after_listener_reset() {
+        let mut gate = KeyPressGate::default();
+
+        assert!(gate.event_to_play(KeyEvent::KeyPress(Key::KeyA)).is_some());
+        assert_eq!(gate.event_to_play(KeyEvent::Reset), None);
+        assert!(gate.event_to_play(KeyEvent::KeyPress(Key::KeyA)).is_some());
     }
 
     #[test]

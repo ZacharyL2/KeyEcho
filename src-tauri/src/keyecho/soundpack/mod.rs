@@ -112,6 +112,8 @@ pub struct KeySoundpack {
     config_path: PathBuf,
 }
 
+pub(crate) struct PreparedSound(Arc<KeySound>);
+
 impl KeySoundpack {
     pub fn try_load(handle: &AppHandle) -> Result<Self> {
         let config_path = handle.path().app_data_dir()?.join("soundpack.config.json");
@@ -148,8 +150,12 @@ impl KeySoundpack {
         self.save_config()
     }
 
-    pub fn select_sound(&mut self, sound: String) -> Result<()> {
-        let current_sound = Arc::new(KeySound::new(&sound)?);
+    pub(crate) fn prepare_sound(sound: String) -> Result<PreparedSound> {
+        Ok(PreparedSound(Arc::new(KeySound::new(&sound)?)))
+    }
+
+    pub(crate) fn select_prepared_sound(&mut self, prepared: PreparedSound) -> Result<()> {
+        let current_sound = prepared.0;
         self.playback
             .set_current_sound(Some(Arc::clone(&current_sound)));
         self.current_sound.replace(current_sound);

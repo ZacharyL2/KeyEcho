@@ -25,10 +25,14 @@ reqwest = { version = "0.13.4", default-features = false, features = [
   "native-tls",
 ] }
 
-rodio = { git = "https://github.com/RustAudio/rodio.git", default-features = false, features = ["playback"] }
+rodio = { git = "https://github.com/RustAudio/rodio.git", rev = "ee3c21f2f3d926110706a2780658d098831c1ed9", default-features = false, features = ["playback"] }
+rubato = "4.0.0"
 symphonia = { version = "0.6.0", default-features = false, features = [
+  "flac",
   "ogg",
+  "pcm",
   "vorbis",
+  "wav",
 ] }
 arc-swap = "1.9.1"
 crossbeam-channel = "0.5.15"
@@ -52,7 +56,7 @@ tempfile = "3.27.0"
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 openssl = { version = "0.10.81", features = ["vendored"] }
-x11 = { version = "2.21.0", features = ["xlib", "xrecord", "xinput"] }
+x11 = { version = "2.21.0", features = ["xlib", "xinput"] }
 
 [profile.release]
 panic = "abort"
@@ -63,3 +67,6 @@ strip = true
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+
+[dev-dependencies]
+tempfile = "3.27.0"

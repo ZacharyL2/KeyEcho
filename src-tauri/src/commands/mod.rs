@@ -53,8 +53,18 @@ pub fn get_volume(soundpack: KeySoundpackState) -> CmdResult<f32> {
 }
 
 #[tauri::command]
-pub fn select_sound(soundpack: KeySoundpackState, sound: String) -> CmdResult<()> {
-    with_soundpack(soundpack, |s| s.select_sound(sound))
+pub async fn select_sound(soundpack: KeySoundpackState<'_>, sound: String) -> CmdResult<()> {
+    let soundpack = soundpack.inner().clone();
+    let prepared = tauri::async_runtime::spawn_blocking(move || KeySoundpack::prepare_sound(sound))
+        .await
+        .map_err(|error| anyhow!("soundpack loading task failed: {error}"))??;
+
+    let result = soundpack
+        .lock()
+        .map_err(|_| anyhow!("error when get soundpack"))?
+        .select_prepared_sound(prepared)
+        .map_err(Into::into);
+    result
 }
 
 #[tauri::command]

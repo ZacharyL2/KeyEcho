@@ -11,12 +11,14 @@ use std::{
 use anyhow::Result;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use rodio::{
-    cpal::ErrorKind, ChannelCount, DeviceSinkBuilder, MixerDeviceSink, SampleRate, Source,
+    cpal::{BufferSize, ErrorKind},
+    ChannelCount, DeviceSinkBuilder, MixerDeviceSink, SampleRate, Source,
 };
 
 use super::{listen_key::KeyEvent, PlaybackSoundpack};
 
 const AUDIO_EVENT_QUEUE_CAPACITY: usize = 256;
+const LOW_LATENCY_BUFFER_CANDIDATES: [u32; 3] = [512, 1024, 2048];
 
 #[derive(Debug, Clone)]
 pub struct AudioSource {
@@ -94,19 +96,39 @@ impl AudioOutput {
         let stream_failed = Arc::new(AtomicBool::new(false));
         let stream_failed_callback = Arc::clone(&stream_failed);
 
-        let mut sink = DeviceSinkBuilder::from_default_device()
-            .ok()?
-            .with_error_callback(move |err| {
-                if matches!(
-                    err.kind(),
-                    ErrorKind::DeviceNotAvailable | ErrorKind::StreamInvalidated
-                ) {
-                    stream_failed_callback.store(true, Ordering::Release);
-                    eprintln!("audio stream requires reopen: {err}");
-                }
+        let error_callback = move |err: rodio::cpal::Error| {
+            if matches!(
+                err.kind(),
+                ErrorKind::DeviceNotAvailable | ErrorKind::StreamInvalidated
+            ) {
+                stream_failed_callback.store(true, Ordering::Release);
+                eprintln!("audio stream requires reopen: {err}");
+            }
+        };
+
+        let mut sink = LOW_LATENCY_BUFFER_CANDIDATES
+            .into_iter()
+            .find_map(|frames| {
+                DeviceSinkBuilder::from_default_device()
+                    .ok()?
+                    .with_buffer_size(BufferSize::Fixed(frames))
+                    .with_error_callback(error_callback.clone())
+                    .open_stream()
+                    .inspect_err(|error| {
+                        eprintln!("audio buffer {frames} frames unavailable: {error}")
+                    })
+                    .ok()
             })
-            .open_sink_or_fallback()
-            .ok()?;
+            .or_else(|| {
+                eprintln!("using the audio device default buffer size");
+                DeviceSinkBuilder::from_default_device()
+                    .ok()?
+                    .with_buffer_size(BufferSize::Default)
+                    .with_error_callback(error_callback)
+                    .open_sink_or_fallback()
+                    .ok()
+            })?;
+        eprintln!("audio output opened with {:?}", sink.config().buffer_size());
         sink.log_on_drop(false);
 
         Some(Self {
@@ -176,7 +198,7 @@ mod tests {
 
     use rodio::Source;
 
-    use super::AudioSource;
+    use super::{AudioSource, LOW_LATENCY_BUFFER_CANDIDATES};
 
     #[test]
     fn audio_source_rejects_invalid_format() {
@@ -223,5 +245,10 @@ mod tests {
     #[test]
     fn audio_event_queue_is_bounded() {
         assert_eq!(super::AUDIO_EVENT_QUEUE_CAPACITY, 256);
+    }
+
+    #[test]
+    fn audio_buffer_candidates_favor_latency_then_stability() {
+        assert_eq!(LOW_LATENCY_BUFFER_CANDIDATES, [512, 1024, 2048]);
     }
 }
