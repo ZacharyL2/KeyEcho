@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use super::SoundDecoder;
-use crate::keyecho::{AudioSource, Key};
+use crate::keyecho::{AudioSource, Key, KeyEvent};
 
 type KeySoundDefines = HashMap<Key, [u64; 2]>;
 const SOUND_MEMORY_BUDGET_BYTES: u64 = 10 * 1024 * 1024;
@@ -14,11 +14,13 @@ const SOUND_MEMORY_BUDGET_CHANNELS: u64 = 2;
 #[derive(Debug, Deserialize)]
 struct SoundFileConfig {
     defines: KeySoundDefines,
+    #[serde(default)]
+    releases: KeySoundDefines,
 }
 
 pub struct KeySound {
     pub(super) name: String,
-    key_sources: HashMap<Key, AudioSource>,
+    event_sources: HashMap<KeyEvent, AudioSource>,
 }
 
 impl KeySound {
@@ -28,13 +30,14 @@ impl KeySound {
         let mut decoder = SoundDecoder::new(dir.join("sound.ogg"))?;
         let file_config =
             serde_json::from_reader::<File, SoundFileConfig>(File::open(dir.join("config.json"))?)?;
-        ensure_sound_memory_budget(&file_config.defines)?;
+        ensure_sound_memory_budget(&file_config.defines, &file_config.releases)?;
         let channels = decoder.channels;
         let sample_rate = decoder.rate;
 
         Self::from_defines(
             sound_dir.to_string(),
             file_config.defines,
+            file_config.releases,
             |start_ms, duration_ms| decoder.get_samples_buf(start_ms, duration_ms),
             channels,
             sample_rate,
@@ -44,6 +47,7 @@ impl KeySound {
     fn from_defines<F>(
         name: String,
         defines: KeySoundDefines,
+        releases: KeySoundDefines,
         mut decode: F,
         channels: u16,
         sample_rate: u32,
@@ -51,35 +55,47 @@ impl KeySound {
     where
         F: FnMut(u64, u64) -> Result<Vec<f32>>,
     {
-        let mut key_sources = HashMap::with_capacity(defines.len());
+        let mut event_sources = HashMap::with_capacity(defines.len() + releases.len());
         let mut slice_sources = HashMap::<[u64; 2], AudioSource>::new();
-        for (key, slice) in defines {
+        let events = defines
+            .into_iter()
+            .map(|(key, slice)| (KeyEvent::KeyPress(key), slice))
+            .chain(
+                releases
+                    .into_iter()
+                    .map(|(key, slice)| (KeyEvent::KeyRelease(key), slice)),
+            );
+
+        for (evt, slice) in events {
             let source = if let Some(source) = slice_sources.get(&slice) {
                 source.clone()
             } else {
                 let [start_ms, duration_ms] = slice;
                 let samples = decode(start_ms, duration_ms)
-                    .with_context(|| format!("error when decoding sound for {key:?}"))?;
+                    .with_context(|| format!("error when decoding sound for {evt:?}"))?;
                 let source = AudioSource::new(Arc::from(samples), channels, sample_rate)
                     .context("error when caching audio source")?;
                 slice_sources.insert(slice, source.clone());
                 source
             };
 
-            key_sources.insert(key, source);
+            event_sources.insert(evt, source);
         }
 
-        Ok(KeySound { name, key_sources })
+        Ok(KeySound {
+            name,
+            event_sources,
+        })
     }
 
-    pub fn key_source(&self, key: Key) -> Option<AudioSource> {
-        self.key_sources.get(&key).cloned()
+    pub fn event_source(&self, evt: KeyEvent) -> Option<AudioSource> {
+        self.event_sources.get(&evt).cloned()
     }
 }
 
-fn ensure_sound_memory_budget(defines: &KeySoundDefines) -> Result<()> {
+fn ensure_sound_memory_budget(defines: &KeySoundDefines, releases: &KeySoundDefines) -> Result<()> {
     let estimated_bytes = estimate_decoded_sample_bytes(
-        unique_slice_duration_ms(defines),
+        unique_slice_duration_ms(defines, releases),
         SOUND_MEMORY_BUDGET_SAMPLE_RATE,
         SOUND_MEMORY_BUDGET_CHANNELS,
     );
@@ -94,9 +110,9 @@ fn ensure_sound_memory_budget(defines: &KeySoundDefines) -> Result<()> {
     Ok(())
 }
 
-fn unique_slice_duration_ms(defines: &KeySoundDefines) -> u64 {
-    let mut unique_slices = HashMap::<[u64; 2], u64>::with_capacity(defines.len());
-    for &slice @ [_start_ms, duration_ms] in defines.values() {
+fn unique_slice_duration_ms(defines: &KeySoundDefines, releases: &KeySoundDefines) -> u64 {
+    let mut unique_slices = HashMap::<[u64; 2], u64>::with_capacity(defines.len() + releases.len());
+    for &slice @ [_start_ms, duration_ms] in defines.values().chain(releases.values()) {
         unique_slices.entry(slice).or_insert(duration_ms);
     }
 
@@ -135,7 +151,7 @@ mod tests {
         KeySound, SoundFileConfig, SOUND_MEMORY_BUDGET_BYTES, SOUND_MEMORY_BUDGET_CHANNELS,
         SOUND_MEMORY_BUDGET_SAMPLE_RATE,
     };
-    use crate::keyecho::Key;
+    use crate::keyecho::{Key, KeyEvent};
 
     const MAX_RESOURCE_KEYS: usize = 104;
     const MAX_RESOURCE_UNIQUE_SLICES: usize = 104;
@@ -184,7 +200,7 @@ mod tests {
         let mut total_duration_ms = 0u64;
         let mut max_slice_duration_ms = 0u64;
 
-        for &[_start_ms, duration_ms] in config.defines.values() {
+        for &[_start_ms, duration_ms] in config.defines.values().chain(config.releases.values()) {
             total_duration_ms = total_duration_ms.saturating_add(duration_ms);
             max_slice_duration_ms = max_slice_duration_ms.max(duration_ms);
         }
@@ -192,16 +208,24 @@ mod tests {
         let unique_slice_count = config
             .defines
             .values()
+            .chain(config.releases.values())
+            .copied()
+            .collect::<HashSet<_>>()
+            .len();
+        let key_count = config
+            .defines
+            .keys()
+            .chain(config.releases.keys())
             .copied()
             .collect::<HashSet<_>>()
             .len();
 
         SoundpackBudget {
             name,
-            key_count: config.defines.len(),
+            key_count,
             unique_slice_count,
             total_duration_ms,
-            unique_duration_ms: unique_slice_duration_ms(&config.defines),
+            unique_duration_ms: unique_slice_duration_ms(&config.defines, &config.releases),
             max_slice_duration_ms,
         }
     }
@@ -245,6 +269,43 @@ mod tests {
     }
 
     #[test]
+    fn sound_file_config_accepts_release_defines() -> Result<()> {
+        let config: SoundFileConfig = serde_json::from_str(
+            r#"{
+                "defines": { "KeyA": [0, 24] },
+                "releases": { "KeyA": [24, 24] }
+            }"#,
+        )?;
+
+        assert_eq!(config.defines.get(&Key::KeyA), Some(&[0, 24]));
+        assert_eq!(config.releases.get(&Key::KeyA), Some(&[24, 24]));
+        Ok(())
+    }
+
+    #[test]
+    fn key_sound_returns_distinct_press_and_release_sources() -> Result<()> {
+        let sound = KeySound::from_defines(
+            "test".to_string(),
+            HashMap::from([(Key::KeyA, [0, 24])]),
+            HashMap::from([(Key::KeyA, [24, 24])]),
+            |start_ms, _duration_ms| Ok(vec![start_ms as f32]),
+            1,
+            44_100,
+        )?;
+
+        let mut press = sound
+            .event_source(KeyEvent::KeyPress(Key::KeyA))
+            .expect("press source");
+        let mut release = sound
+            .event_source(KeyEvent::KeyRelease(Key::KeyA))
+            .expect("release source");
+
+        assert_eq!(press.next(), Some(0.0));
+        assert_eq!(release.next(), Some(24.0));
+        Ok(())
+    }
+
+    #[test]
     fn key_sound_decodes_each_unique_slice_once() -> Result<()> {
         let mut defines = HashMap::new();
         defines.insert(Key::KeyA, [0, 24]);
@@ -255,6 +316,7 @@ mod tests {
         let sound = KeySound::from_defines(
             "test".to_string(),
             defines,
+            HashMap::new(),
             |start_ms, duration_ms| {
                 calls.push([start_ms, duration_ms]);
                 Ok(vec![start_ms as f32, duration_ms as f32])
@@ -266,9 +328,15 @@ mod tests {
         calls.sort_unstable();
         assert_eq!(calls, vec![[0, 24], [24, 24]]);
 
-        let a = sound.key_source(Key::KeyA).expect("key A source");
-        let b = sound.key_source(Key::KeyB).expect("key B source");
-        let c = sound.key_source(Key::KeyC).expect("key C source");
+        let a = sound
+            .event_source(KeyEvent::KeyPress(Key::KeyA))
+            .expect("key A source");
+        let b = sound
+            .event_source(KeyEvent::KeyPress(Key::KeyB))
+            .expect("key B source");
+        let c = sound
+            .event_source(KeyEvent::KeyPress(Key::KeyC))
+            .expect("key C source");
 
         assert!(a.shares_samples_with(&b));
         assert!(!a.shares_samples_with(&c));
@@ -277,20 +345,25 @@ mod tests {
     }
 
     #[test]
-    fn key_source_returns_fresh_cursor_over_shared_samples() -> Result<()> {
+    fn event_source_returns_fresh_cursor_over_shared_samples() -> Result<()> {
         let mut defines = HashMap::new();
         defines.insert(Key::KeyA, [0, 24]);
 
         let sound = KeySound::from_defines(
             "test".to_string(),
             defines,
+            HashMap::new(),
             |_start_ms, _duration_ms| Ok(vec![0.0, 1.0, 2.0]),
             1,
             44_100,
         )?;
 
-        let mut first = sound.key_source(Key::KeyA).expect("first source");
-        let second = sound.key_source(Key::KeyA).expect("second source");
+        let mut first = sound
+            .event_source(KeyEvent::KeyPress(Key::KeyA))
+            .expect("first source");
+        let second = sound
+            .event_source(KeyEvent::KeyPress(Key::KeyA))
+            .expect("second source");
 
         assert_eq!(first.next(), Some(0.0));
         assert_eq!(first.len(), 2);
@@ -308,21 +381,28 @@ mod tests {
         let sound = Arc::new(KeySound::from_defines(
             "test".to_string(),
             defines,
+            HashMap::new(),
             |_start_ms, _duration_ms| Ok(vec![0.0]),
             1,
             44_100,
         )?);
 
         let playback = PlaybackSoundpack::new(Some(sound), 0.25);
-        let (_source, volume) = playback.source_for_key(Key::KeyA).expect("playback source");
+        let (_source, volume) = playback
+            .source_for_event(KeyEvent::KeyPress(Key::KeyA))
+            .expect("playback source");
         assert_eq!(volume, 0.25);
 
         playback.set_volume(0.5);
-        let (_source, volume) = playback.source_for_key(Key::KeyA).expect("playback source");
+        let (_source, volume) = playback
+            .source_for_event(KeyEvent::KeyPress(Key::KeyA))
+            .expect("playback source");
         assert_eq!(volume, 0.5);
 
         playback.set_current_sound(None);
-        assert!(playback.source_for_key(Key::KeyA).is_none());
+        assert!(playback
+            .source_for_event(KeyEvent::KeyPress(Key::KeyA))
+            .is_none());
 
         Ok(())
     }
@@ -335,19 +415,20 @@ mod tests {
         let sound = Arc::new(KeySound::from_defines(
             "test".to_string(),
             defines,
+            HashMap::new(),
             |_start_ms, _duration_ms| Ok(vec![0.0, 1.0, 2.0, 3.0]),
             1,
             44_100,
         )?);
         let playback = PlaybackSoundpack::new(Some(sound), 1.0);
         let first = playback
-            .source_for_key(Key::KeyA)
+            .source_for_event(KeyEvent::KeyPress(Key::KeyA))
             .expect("first playback source")
             .0;
 
         for _ in 0..1_000 {
             let next = playback
-                .source_for_key(Key::KeyA)
+                .source_for_event(KeyEvent::KeyPress(Key::KeyA))
                 .expect("next playback source")
                 .0;
             assert!(first.shares_samples_with(&next));
@@ -406,7 +487,7 @@ mod tests {
             / size_of::<f32>() as u64;
         let defines = HashMap::from([(Key::KeyA, [0, duration_ms])]);
 
-        ensure_sound_memory_budget(&defines)
+        ensure_sound_memory_budget(&defines, &HashMap::new())
     }
 
     #[test]
@@ -417,7 +498,8 @@ mod tests {
             / size_of::<f32>() as u64;
         let defines = HashMap::from([(Key::KeyA, [0, limit_duration_ms + 1])]);
 
-        let err = ensure_sound_memory_budget(&defines).expect_err("budget should reject");
+        let err = ensure_sound_memory_budget(&defines, &HashMap::new())
+            .expect_err("budget should reject");
         assert!(err.to_string().contains("decoded sample budget exceeded"));
     }
 
@@ -425,7 +507,7 @@ mod tests {
     fn sound_memory_budget_dedupes_identical_slices() {
         let defines = HashMap::from([(Key::KeyA, [0, 100]), (Key::KeyB, [0, 100])]);
 
-        assert_eq!(unique_slice_duration_ms(&defines), 100);
+        assert_eq!(unique_slice_duration_ms(&defines, &HashMap::new()), 100);
         assert_eq!(estimate_decoded_sample_bytes(100, 48_000, 2), 38_400);
     }
 
@@ -446,6 +528,7 @@ mod tests {
             Some(Arc::new(KeySound::from_defines(
                 "bench".to_string(),
                 HashMap::from([(Key::KeyA, [0, duration_ms])]),
+                HashMap::new(),
                 |_start_ms, _duration_ms| Ok(samples.clone()),
                 2,
                 44_100,
@@ -461,7 +544,9 @@ mod tests {
         let current = min_elapsed(|| {
             let mut consumed = 0usize;
             for _ in 0..LOOKUP_BENCH_ITERATIONS {
-                let (source, volume) = playback.source_for_key(Key::KeyA).expect("source");
+                let (source, volume) = playback
+                    .source_for_event(KeyEvent::KeyPress(Key::KeyA))
+                    .expect("source");
                 consumed = consumed
                     .wrapping_add(source.len())
                     .wrapping_add((volume.to_bits() & 1) as usize);

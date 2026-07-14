@@ -14,7 +14,7 @@ use rodio::{
     cpal::ErrorKind, ChannelCount, DeviceSinkBuilder, MixerDeviceSink, SampleRate, Source,
 };
 
-use super::{listen_key::Key, PlaybackSoundpack};
+use super::{listen_key::KeyEvent, PlaybackSoundpack};
 
 const AUDIO_EVENT_QUEUE_CAPACITY: usize = 256;
 
@@ -125,7 +125,7 @@ impl AudioOutput {
 }
 
 pub struct SoundPlayer {
-    sender: Sender<Key>,
+    sender: Sender<KeyEvent>,
 }
 
 impl SoundPlayer {
@@ -137,11 +137,14 @@ impl SoundPlayer {
         Self { sender }
     }
 
-    fn handle_audio_thread(receiver: Receiver<Key>, playback: PlaybackSoundpack) -> Result<()> {
+    fn handle_audio_thread(
+        receiver: Receiver<KeyEvent>,
+        playback: PlaybackSoundpack,
+    ) -> Result<()> {
         let mut output = AudioOutput::open_default();
 
-        while let Ok(key) = receiver.recv() {
-            let Some((source, volume)) = playback.source_for_key(key) else {
+        while let Ok(evt) = receiver.recv() {
+            let Some((source, volume)) = playback.source_for_event(evt) else {
                 continue;
             };
 
@@ -162,8 +165,8 @@ impl SoundPlayer {
         Ok(())
     }
 
-    pub fn try_play(&self, key: Key) {
-        let _ = self.sender.try_send(key);
+    pub fn try_play(&self, evt: KeyEvent) {
+        let _ = self.sender.try_send(evt);
     }
 }
 

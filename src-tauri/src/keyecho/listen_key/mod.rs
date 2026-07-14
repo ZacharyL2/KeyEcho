@@ -112,7 +112,7 @@ pub enum Key {
     Unknown(u32),
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyEvent {
     KeyPress(Key),
     KeyRelease(Key),

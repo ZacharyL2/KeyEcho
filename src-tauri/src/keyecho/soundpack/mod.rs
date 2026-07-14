@@ -17,7 +17,7 @@ mod sound;
 
 use decoder::SoundDecoder;
 
-use super::{listen_key::Key, AudioSource};
+use super::{listen_key::KeyEvent, AudioSource};
 use sound::KeySound;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,9 +96,9 @@ impl PlaybackSoundpack {
         self.volume_bits.store(volume.to_bits(), Ordering::Relaxed);
     }
 
-    pub(super) fn source_for_key(&self, key: Key) -> Option<(AudioSource, f32)> {
+    pub(super) fn source_for_event(&self, evt: KeyEvent) -> Option<(AudioSource, f32)> {
         let current_sound = self.current_sound.load();
-        let source = current_sound.as_ref()?.key_source(key)?;
+        let source = current_sound.as_ref()?.event_source(evt)?;
         let volume = f32::from_bits(self.volume_bits.load(Ordering::Relaxed));
         Some((source, volume))
     }

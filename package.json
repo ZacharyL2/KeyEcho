@@ -7,6 +7,8 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "bench:audio": "cargo test --release --manifest-path src-tauri/Cargo.toml reference_timing -- --ignored --nocapture",
+    "install:model-m-test-pack": "tsx scripts/install-model-m-test-pack.ts",
+    "install:derived-press-release-packs": "tsx scripts/install-derived-press-release-packs.ts",
     "test": "pnpm run test:rust && pnpm run web:test && pnpm run web:build",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "updater": "tsx scripts/updater.ts",
