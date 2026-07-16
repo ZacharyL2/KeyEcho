@@ -2,6 +2,10 @@
   <img src="./docs/assets/keyecho-hero.png" alt="KeyEcho — fast-responsive keyboard sounds with every keystroke. Open-source keyboard sound utility built with Tauri and Rust." />
 </p>
 
+<p align="center">
+  <a href="https://trendshift.io/repositories/14140" target="_blank"><img src="https://trendshift.io/api/badge/repositories/14140" alt="ZacharyL2/KeyEcho | Trendshift" width="250" height="55" /></a>
+</p>
+
 # KeyEcho
 
 KeyEcho is a tiny open-source desktop app that plays pleasant keyboard sounds
