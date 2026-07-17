@@ -155,6 +155,15 @@ extern "C" {
     static kCFRunLoopCommonModes: CFRunLoopMode;
 }
 
+// Input Monitoring (TCC) gate for CGEventTap — there's no entitlement for it,
+// so we check and request the grant at runtime instead of failing the tap
+// silently. macOS 10.15+.
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPreflightListenEventAccess() -> bool;
+    fn CGRequestListenEventAccess() -> bool;
+}
+
 #[allow(non_upper_case_globals)]
 const kCGHeadInsertEventTap: CGEventTapPlacement = 0;
 
@@ -179,6 +188,18 @@ where
     T: FnMut(KeyEvent) + 'static,
 {
     unsafe {
+        // Tap creation below returns null without the Input Monitoring grant.
+        // Check first; on first run (or after revocation) fire the prompt and
+        // bail — macOS only applies a new grant after relaunch.
+        if !CGPreflightListenEventAccess() {
+            CGRequestListenEventAccess();
+            eprintln!(
+                "KeyEcho needs Input Monitoring. Enable it in System Settings > \
+                 Privacy & Security > Input Monitoring, then relaunch KeyEcho."
+            );
+            return Err(ListenError::InputMonitoringDenied);
+        }
+
         let state = Box::new(EventTapState {
             callback: Box::new(callback),
             pressed_modifiers: HashSet::new(),

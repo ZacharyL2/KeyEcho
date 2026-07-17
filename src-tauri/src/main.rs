@@ -17,15 +17,21 @@ use features::autostart::{is_auto_launch_enabled, set_auto_launch};
 fn main() {
     let context = tauri::generate_context!();
 
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|_, _, _| {}))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_opener::init());
+
+    // The Mac App Store forbids self-updating apps; the Store handles updates.
+    // Every other target keeps the in-app updater.
+    #[cfg(not(feature = "app-store"))]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
+    let app = builder
         .invoke_handler(tauri::generate_handler![
             download_sound,
             get_sounds,

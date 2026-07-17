@@ -124,6 +124,7 @@ pub enum KeyEvent {
 pub enum ListenError {
     EventTap,
     LoopSource,
+    InputMonitoringDenied,
 
     MissingDisplay,
     XInputExtension,

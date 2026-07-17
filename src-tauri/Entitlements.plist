@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Mac App Store requires the App Sandbox. -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+
+    <!-- Outbound network for sound-pack downloads (download_sound command). -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- Let users import their own sound packs via the file picker. -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <!--
+      Note: global keyboard monitoring via CGEventTap needs the user's
+      Input Monitoring grant (TCC), NOT a sandbox entitlement. There is no
+      entitlement key for it; the app requests it at runtime with
+      CGRequestListenEventAccess. See src/keyecho/listen_key/platform_impl/macos.rs.
+    -->
+</dict>
+</plist>

@@ -86,6 +86,17 @@ impl Source for AudioSource {
     }
 }
 
+/// Errors meaning the output stream is gone and the sink must be reopened on
+/// the new default device. cpal reroutes to the new default itself; when it
+/// can't, it reports one of these and we reopen. Named so the classification
+/// is testable. See the rodio pin note in Cargo.toml.
+fn is_stream_lost(kind: &ErrorKind) -> bool {
+    matches!(
+        kind,
+        ErrorKind::DeviceNotAvailable | ErrorKind::StreamInvalidated
+    )
+}
+
 struct AudioOutput {
     sink: MixerDeviceSink,
     stream_failed: Arc<AtomicBool>,
@@ -97,10 +108,7 @@ impl AudioOutput {
         let stream_failed_callback = Arc::clone(&stream_failed);
 
         let error_callback = move |err: rodio::cpal::Error| {
-            if matches!(
-                err.kind(),
-                ErrorKind::DeviceNotAvailable | ErrorKind::StreamInvalidated
-            ) {
+            if is_stream_lost(&err.kind()) {
                 stream_failed_callback.store(true, Ordering::Release);
                 eprintln!("audio stream requires reopen: {err}");
             }
@@ -250,5 +258,15 @@ mod tests {
     #[test]
     fn audio_buffer_candidates_favor_latency_then_stability() {
         assert_eq!(LOW_LATENCY_BUFFER_CANDIDATES, [512, 1024, 2048]);
+    }
+
+    // Pins the error classification the reopen decision depends on, so dropping
+    // a variant fails here. cpal's own rerouting needs real hardware; not tested.
+    #[test]
+    fn lost_stream_errors_force_a_reopen() {
+        use rodio::cpal::ErrorKind;
+
+        assert!(super::is_stream_lost(&ErrorKind::DeviceNotAvailable));
+        assert!(super::is_stream_lost(&ErrorKind::StreamInvalidated));
     }
 }

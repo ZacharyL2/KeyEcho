@@ -25,6 +25,11 @@ reqwest = { version = "0.13.4", default-features = false, features = [
   "native-tls",
 ] }
 
+# Pinned to a rodio git rev on cpal 0.18, which reroutes playback to the new
+# default output when devices change (requested in #41, #20). The crates.io
+# rodio pulls cpal 0.17, which drops this — a silent downgrade visible only in
+# Cargo.lock and covered by no test, so don't swap it. Recovery: is_stream_lost
+# in src/keyecho/echo.rs.
 rodio = { git = "https://github.com/RustAudio/rodio.git", rev = "ee3c21f2f3d926110706a2780658d098831c1ed9", default-features = false, features = ["playback"] }
 rubato = "4.0.0"
 symphonia = { version = "0.6.0", default-features = false, features = [
@@ -67,6 +72,9 @@ strip = true
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+# Mac App Store build: App Sandbox, no self-updater (the Store handles updates).
+# See docs/mac-app-store.md.
+app-store = []
 
 [dev-dependencies]
 tempfile = "3.27.0"
