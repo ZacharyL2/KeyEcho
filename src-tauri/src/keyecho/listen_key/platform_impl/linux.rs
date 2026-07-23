@@ -125,7 +125,7 @@ where
 
         let mut major = 2;
         let mut minor = 0;
-        if xinput2::XIQueryVersion(display, &mut major, &mut minor) != xlib::Success {
+        if xinput2::XIQueryVersion(display, &mut major, &mut minor) != i32::from(xlib::Success) {
             xlib::XCloseDisplay(display);
             return Err(ListenError::XInputExtension);
         }
@@ -139,7 +139,7 @@ where
             mask: mask.as_mut_ptr(),
         };
         let root = xlib::XDefaultRootWindow(display);
-        if xinput2::XISelectEvents(display, root, &mut event_mask, 1) != xlib::Success {
+        if xinput2::XISelectEvents(display, root, &mut event_mask, 1) != i32::from(xlib::Success) {
             xlib::XCloseDisplay(display);
             return Err(ListenError::XInputExtension);
         }
