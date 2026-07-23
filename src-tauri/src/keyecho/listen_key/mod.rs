@@ -108,14 +108,16 @@ pub enum Key {
     Kp8,
     Kp9,
     KpDelete,
+    #[serde(alias = "Fn")]
     Function,
     Unknown(u32),
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyEvent {
     KeyPress(Key),
     KeyRelease(Key),
+    Reset,
 }
 
 #[allow(dead_code)]
@@ -123,11 +125,10 @@ pub enum KeyEvent {
 pub enum ListenError {
     EventTap,
     LoopSource,
+    InputMonitoringDenied,
 
     MissingDisplay,
-    RecordContextEnabling,
-    RecordContext,
-    XRecordExtension,
+    XInputExtension,
 
     KeyHook(u32),
 }

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "KeyEcho",
-  "version": "1.0.0",
-  "identifier": "xyz.waveapps.keyecho",
+  "version": "1.1.0",
+  "identifier": "app.keyecho.keyecho",
   "mainBinaryName": "KeyEcho",
   "build": {
     "beforeDevCommand": "pnpm run web:dev",
@@ -13,7 +13,8 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": "default-src 'self' tauri: asset:; connect-src 'self' ipc: http://ipc.localhost http://localhost:3426 ws://localhost:3426 https://keyecho.app https://www.keyecho.app https://api.github.com https://raw.githubusercontent.com; img-src 'self' asset: data:; script-src 'self'; style-src 'self' 'unsafe-inline';"
+      "csp": "default-src 'self' tauri: asset:; connect-src 'self' ipc: http://ipc.localhost http://localhost:3426 ws://localhost:3426 https://keyecho.app https://www.keyecho.app https://cdn.keyecho.app https://api.github.com https://raw.githubusercontent.com; img-src 'self' asset: data:; script-src 'self'; style-src 'self' 'unsafe-inline';",
+      "devCsp": "default-src 'self' tauri: asset:; connect-src 'self' ipc: http://ipc.localhost http://localhost:3426 ws://localhost:3426 http://localhost:3999 https://keyecho.app https://www.keyecho.app https://cdn.keyecho.app https://api.github.com https://raw.githubusercontent.com; img-src 'self' asset: data:; script-src 'self'; style-src 'self' 'unsafe-inline';"
     }
   },
   "bundle": {
@@ -30,6 +31,11 @@
     ]
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["keyecho"]
+      }
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMxRjI2Njg0MjBENTUwRDQKUldUVVVOVWdoR2J5d1drWEJhWGl6UU9GNmlWUHJqUjJJRVpBbVZZeHh3YlF2MlRkNERHUjFEOUYK",
       "endpoints": [

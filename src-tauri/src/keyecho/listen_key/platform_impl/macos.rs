@@ -13,6 +13,7 @@ fn key_from_code(code: CGKeyCode) -> Key {
         59 => Key::ControlLeft,
         62 => Key::ControlRight,
         125 => Key::DownArrow,
+        119 => Key::End,
         53 => Key::Escape,
         122 => Key::F1,
         109 => Key::F10,
@@ -28,10 +29,14 @@ fn key_from_code(code: CGKeyCode) -> Key {
         101 => Key::F9,
         63 => Key::Function,
         123 => Key::LeftArrow,
+        115 => Key::Home,
         55 => Key::MetaLeft,
         54 => Key::MetaRight,
         36 => Key::Return,
         124 => Key::RightArrow,
+        121 => Key::PageDown,
+        116 => Key::PageUp,
+        117 => Key::Delete,
         56 => Key::ShiftLeft,
         60 => Key::ShiftRight,
         49 => Key::Space,
@@ -84,6 +89,23 @@ fn key_from_code(code: CGKeyCode) -> Key {
         43 => Key::Comma,
         47 => Key::Dot,
         44 => Key::Slash,
+        114 => Key::Insert,
+        76 => Key::KpReturn,
+        78 => Key::KpMinus,
+        69 => Key::KpPlus,
+        67 => Key::KpMultiply,
+        75 => Key::KpDivide,
+        82 => Key::Kp0,
+        83 => Key::Kp1,
+        84 => Key::Kp2,
+        85 => Key::Kp3,
+        86 => Key::Kp4,
+        87 => Key::Kp5,
+        88 => Key::Kp6,
+        89 => Key::Kp7,
+        91 => Key::Kp8,
+        92 => Key::Kp9,
+        65 => Key::KpDelete,
         _ => Key::Unknown(code.into()),
     }
 }
@@ -133,6 +155,15 @@ extern "C" {
     static kCFRunLoopCommonModes: CFRunLoopMode;
 }
 
+// Input Monitoring (TCC) gate for CGEventTap — there's no entitlement for it,
+// so we check and request the grant at runtime instead of failing the tap
+// silently. macOS 10.15+.
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPreflightListenEventAccess() -> bool;
+    fn CGRequestListenEventAccess() -> bool;
+}
+
 #[allow(non_upper_case_globals)]
 const kCGHeadInsertEventTap: CGEventTapPlacement = 0;
 
@@ -149,6 +180,7 @@ enum CGEventTapOption {
 struct EventTapState {
     callback: Box<dyn FnMut(KeyEvent)>,
     pressed_modifiers: HashSet<CGKeyCode>,
+    tap: CFMachPortRef,
 }
 
 pub fn listen<T>(callback: T) -> Result<(), ListenError>
@@ -156,9 +188,22 @@ where
     T: FnMut(KeyEvent) + 'static,
 {
     unsafe {
+        // Tap creation below returns null without the Input Monitoring grant.
+        // Check first; on first run (or after revocation) fire the prompt and
+        // bail — macOS only applies a new grant after relaunch.
+        if !CGPreflightListenEventAccess() {
+            CGRequestListenEventAccess();
+            eprintln!(
+                "KeyEcho needs Input Monitoring. Enable it in System Settings > \
+                 Privacy & Security > Input Monitoring, then relaunch KeyEcho."
+            );
+            return Err(ListenError::InputMonitoringDenied);
+        }
+
         let state = Box::new(EventTapState {
             callback: Box::new(callback),
             pressed_modifiers: HashSet::new(),
+            tap: std::ptr::null(),
         });
         let state_ptr = Box::into_raw(state);
 
@@ -174,6 +219,7 @@ where
             drop(Box::from_raw(state_ptr));
             return Err(ListenError::EventTap);
         }
+        (*state_ptr).tap = tap;
 
         let run_loop_source = CFMachPortCreateRunLoopSource(null_mut(), tap, 0);
         if run_loop_source.is_null() {
@@ -201,6 +247,18 @@ unsafe extern "C" fn raw_callback(
     let Some(state) = (user_info as *mut EventTapState).as_mut() else {
         return cg_event;
     };
+
+    if matches!(
+        event_type,
+        CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput
+    ) {
+        state.pressed_modifiers.clear();
+        (state.callback)(KeyEvent::Reset);
+        if !state.tap.is_null() {
+            CGEventTapEnable(state.tap, true);
+        }
+        return cg_event;
+    }
 
     if let Some(event) = convert_event(event_type, &cg_event, &mut state.pressed_modifiers) {
         (state.callback)(event);
@@ -253,7 +311,19 @@ fn modifier_key_from_code(code: CGKeyCode) -> Option<Key> {
 mod tests {
     use std::collections::HashSet;
 
-    use super::{convert_modifier_event, Key, KeyEvent};
+    use super::{convert_modifier_event, key_from_code, Key, KeyEvent};
+
+    #[test]
+    fn navigation_and_keypad_codes_are_mapped() {
+        assert_eq!(key_from_code(115), Key::Home);
+        assert_eq!(key_from_code(119), Key::End);
+        assert_eq!(key_from_code(116), Key::PageUp);
+        assert_eq!(key_from_code(121), Key::PageDown);
+        assert_eq!(key_from_code(117), Key::Delete);
+        assert_eq!(key_from_code(82), Key::Kp0);
+        assert_eq!(key_from_code(92), Key::Kp9);
+        assert_eq!(key_from_code(76), Key::KpReturn);
+    }
 
     #[test]
     fn modifier_events_track_left_and_right_keys_independently() {
