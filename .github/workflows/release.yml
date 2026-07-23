@@ -563,7 +563,10 @@ jobs:
 
       - name: Install Release Note Dependencies
         if: matrix.buildMode == 'docker'
-        run: pnpm install --frozen-lockfile
+        # The docker build leaves a root-owned node_modules; pnpm can't recreate it.
+        run: |
+          sudo rm -rf node_modules
+          pnpm install --frozen-lockfile
 
       - name: Prepare Release Notes
         shell: bash
