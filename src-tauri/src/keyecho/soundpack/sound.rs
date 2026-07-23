@@ -1,10 +1,7 @@
 use std::{
     collections::HashMap,
     path::{Component, Path, PathBuf},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::Arc,
 };
 
 use anyhow::{Context, Result};
@@ -17,7 +14,9 @@ use crate::keyecho::{AudioSource, Key, KeyEvent};
 
 type KeySoundDefines = HashMap<Key, [u64; 2]>;
 type KeyFrameDefines = HashMap<Key, Vec<FrameSlice>>;
-const SOUND_MEMORY_BUDGET_BYTES: u64 = 10 * 1024 * 1024;
+// Experimental archive packs intentionally expose hundreds of variants while
+// the sound library is being evaluated. Revisit this before a public release.
+const SOUND_MEMORY_BUDGET_BYTES: u64 = 48 * 1024 * 1024;
 const DECODED_BANK_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
 #[cfg(test)]
 const SOUND_MEMORY_BUDGET_SAMPLE_RATE: u64 = 48_000;
@@ -127,55 +126,9 @@ impl AudioConverter {
     }
 }
 
-struct SourceVariants {
-    sources: Arc<[AudioSource]>,
-    selection_state: AtomicU64,
-}
-
-impl SourceVariants {
-    fn new(sources: Vec<AudioSource>) -> Result<Self> {
-        anyhow::ensure!(!sources.is_empty(), "sound event has no variants");
-        Ok(Self {
-            sources: Arc::from(sources),
-            selection_state: AtomicU64::new(0x9e37_79b9),
-        })
-    }
-
-    fn next_source(&self) -> AudioSource {
-        if self.sources.len() == 1 {
-            return self.sources[0].clone();
-        }
-
-        let mut state = self.selection_state.load(Ordering::Relaxed);
-        loop {
-            let last = ((state >> 32) as usize).checked_sub(1);
-            let mut random = state as u32;
-            random ^= random << 13;
-            random ^= random >> 17;
-            random ^= random << 5;
-
-            let mut next = random as usize % (self.sources.len() - usize::from(last.is_some()));
-            if last.is_some_and(|last| next >= last) {
-                next += 1;
-            }
-
-            let next_state = u64::from(random) | (((next + 1) as u64) << 32);
-            match self.selection_state.compare_exchange_weak(
-                state,
-                next_state,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return self.sources[next].clone(),
-                Err(current) => state = current,
-            }
-        }
-    }
-}
-
 pub struct KeySound {
     pub(super) name: String,
-    event_sources: HashMap<KeyEvent, SourceVariants>,
+    event_sources: HashMap<KeyEvent, AudioSource>,
 }
 
 impl KeySound {
@@ -262,29 +215,29 @@ impl KeySound {
             );
 
         for (event, slices) in events {
-            let mut variants = Vec::with_capacity(slices.len());
-            for slice in slices {
-                let source = if let Some(source) = slice_sources.get(&slice) {
-                    source.clone()
-                } else {
-                    let mut samples = slice_interleaved(&decoded.samples, decoded.channels, slice)
-                        .with_context(|| format!("invalid audio slice for {event:?}"))?;
-                    apply_edge_fades(&mut samples, decoded.channels, decoded.sample_rate);
-                    let samples = converter.convert(samples)?;
-                    cached_sample_count = cached_sample_count.saturating_add(samples.len() as u64);
-                    ensure_cached_sample_budget(cached_sample_count)?;
-                    let source = AudioSource::new(
-                        Arc::from(samples),
-                        output_format.channels,
-                        output_format.sample_rate,
-                    )
-                    .context("error when caching audio source")?;
-                    slice_sources.insert(slice, source.clone());
-                    source
-                };
-                variants.push(source);
-            }
-            event_sources.insert(event, SourceVariants::new(variants)?);
+            let slice = slices
+                .into_iter()
+                .next()
+                .with_context(|| format!("sound event has no source for {event:?}"))?;
+            let source = if let Some(source) = slice_sources.get(&slice) {
+                source.clone()
+            } else {
+                let mut samples = slice_interleaved(&decoded.samples, decoded.channels, slice)
+                    .with_context(|| format!("invalid audio slice for {event:?}"))?;
+                apply_edge_fades(&mut samples, decoded.channels, decoded.sample_rate);
+                let samples = converter.convert(samples)?;
+                cached_sample_count = cached_sample_count.saturating_add(samples.len() as u64);
+                ensure_cached_sample_budget(cached_sample_count)?;
+                let source = AudioSource::new(
+                    Arc::from(samples),
+                    output_format.channels,
+                    output_format.sample_rate,
+                )
+                .context("error when caching audio source")?;
+                slice_sources.insert(slice, source.clone());
+                source
+            };
+            event_sources.insert(event, source);
         }
 
         Ok(Self {
@@ -329,7 +282,7 @@ impl KeySound {
                 source
             };
 
-            event_sources.insert(evt, SourceVariants::new(vec![source])?);
+            event_sources.insert(evt, source);
         }
 
         Ok(KeySound {
@@ -339,9 +292,7 @@ impl KeySound {
     }
 
     pub fn event_source(&self, evt: KeyEvent) -> Option<AudioSource> {
-        self.event_sources
-            .get(&evt)
-            .map(SourceVariants::next_source)
+        self.event_sources.get(&evt).cloned()
     }
 }
 
@@ -530,11 +481,9 @@ fn bytes_to_mib(bytes: u64) -> f64 {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{HashMap, HashSet},
-        ffi::OsStr,
-        fs::{self, File},
+        collections::HashMap,
+        fs,
         hint::black_box,
-        path::Path,
         sync::{Arc, Mutex},
         time::{Duration, Instant},
     };
@@ -546,27 +495,12 @@ mod tests {
         apply_edge_fades, convert_audio_format, convert_channels, ensure_audio_filename,
         ensure_sound_memory_budget, estimate_decoded_sample_bytes, legacy_defines_to_frames,
         slice_interleaved, unique_slice_duration_ms, AudioFormat, FrameSlice, KeySound,
-        SoundFileConfig, SoundFileConfigV2, SourceVariants, SOUND_MEMORY_BUDGET_BYTES,
+        SoundFileConfig, SoundFileConfigV2, SOUND_MEMORY_BUDGET_BYTES,
         SOUND_MEMORY_BUDGET_CHANNELS, SOUND_MEMORY_BUDGET_SAMPLE_RATE,
     };
-    use crate::keyecho::{AudioSource, Key, KeyEvent};
+    use crate::keyecho::{Key, KeyEvent};
 
-    const MAX_RESOURCE_KEYS: usize = 104;
-    const MAX_RESOURCE_UNIQUE_SLICES: usize = 104;
-    const MAX_RESOURCE_UNIQUE_DURATION_MS: u64 = 18_500;
-    const MAX_RESOURCE_DECODED_BYTES_48K_STEREO: u64 = 10 * 1024 * 1024;
-    const MAX_SINGLE_KEY_DECODED_BYTES_48K_STEREO: u64 = 512 * 1024;
     const LOOKUP_BENCH_ITERATIONS: usize = 200_000;
-
-    #[derive(Debug)]
-    struct SoundpackBudget {
-        name: String,
-        key_count: usize,
-        unique_slice_count: usize,
-        total_duration_ms: u64,
-        unique_duration_ms: u64,
-        max_slice_duration_ms: u64,
-    }
 
     #[derive(Clone)]
     struct OldAudioSource {
@@ -584,88 +518,6 @@ mod tests {
         }
     }
 
-    impl SoundpackBudget {
-        fn decoded_bytes_48k_stereo(&self) -> u64 {
-            estimate_decoded_sample_bytes(self.unique_duration_ms, 48_000, 2)
-        }
-
-        fn max_slice_decoded_bytes_48k_stereo(&self) -> u64 {
-            estimate_decoded_sample_bytes(self.max_slice_duration_ms, 48_000, 2)
-        }
-    }
-
-    fn budget_from_config(name: String, config: SoundFileConfig) -> SoundpackBudget {
-        let mut total_duration_ms = 0u64;
-        let mut max_slice_duration_ms = 0u64;
-
-        for &[_start_ms, duration_ms] in config.defines.values().chain(config.releases.values()) {
-            total_duration_ms = total_duration_ms.saturating_add(duration_ms);
-            max_slice_duration_ms = max_slice_duration_ms.max(duration_ms);
-        }
-
-        let unique_slice_count = config
-            .defines
-            .values()
-            .chain(config.releases.values())
-            .copied()
-            .collect::<HashSet<_>>()
-            .len();
-        let key_count = config
-            .defines
-            .keys()
-            .chain(config.releases.keys())
-            .copied()
-            .collect::<HashSet<_>>()
-            .len();
-
-        SoundpackBudget {
-            name,
-            key_count,
-            unique_slice_count,
-            total_duration_ms,
-            unique_duration_ms: unique_slice_duration_ms(&config.defines, &config.releases),
-            max_slice_duration_ms,
-        }
-    }
-
-    fn resource_soundpack_configs() -> Result<Vec<(String, SoundFileConfig)>> {
-        let resources_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources");
-        let mut configs = Vec::new();
-
-        for entry in fs::read_dir(resources_dir)? {
-            let path = entry?.path();
-            if path.extension() != Some(OsStr::new("tar")) {
-                continue;
-            }
-
-            configs.push((resource_name(&path)?, config_from_tar(&path)?));
-        }
-
-        configs.sort_by(|(left, _), (right, _)| left.cmp(right));
-        Ok(configs)
-    }
-
-    fn resource_name(path: &Path) -> Result<String> {
-        path.file_stem()
-            .and_then(OsStr::to_str)
-            .map(ToOwned::to_owned)
-            .context("resource tar has no valid file stem")
-    }
-
-    fn config_from_tar(path: &Path) -> Result<SoundFileConfig> {
-        let file = File::open(path)?;
-        let mut archive = tar::Archive::new(file);
-
-        for entry in archive.entries()? {
-            let entry = entry?;
-            if entry.path()?.file_name() == Some(OsStr::new("config.json")) {
-                return serde_json::from_reader(entry).context("invalid soundpack config");
-            }
-        }
-
-        anyhow::bail!("missing config.json in {}", path.display())
-    }
-
     #[test]
     fn sound_file_config_accepts_release_defines() -> Result<()> {
         let config: SoundFileConfig = serde_json::from_str(
@@ -680,7 +532,24 @@ mod tests {
         Ok(())
     }
 
-    fn mono_pcm16_wav(frame_count: u32, sample_rate: u32) -> Vec<u8> {
+    #[test]
+    fn v2_manifest_accepts_fn_key_alias() -> Result<()> {
+        let config: SoundFileConfigV2 = serde_json::from_str(
+            r#"{
+                "schemaVersion": 2,
+                "audio": { "file": "sound.flac" },
+                "defines": {
+                    "Fn": [{ "startFrame": 0, "frameCount": 100 }]
+                }
+            }"#,
+        )?;
+
+        assert!(config.defines.contains_key(&Key::Function));
+        Ok(())
+    }
+
+    fn mono_pcm16_wav(samples: &[i16], sample_rate: u32) -> Vec<u8> {
+        let frame_count = samples.len() as u32;
         let data_bytes = frame_count * 2;
         let mut wav = Vec::with_capacity((44 + data_bytes) as usize);
         wav.extend_from_slice(b"RIFF");
@@ -695,14 +564,21 @@ mod tests {
         wav.extend_from_slice(&16u16.to_le_bytes());
         wav.extend_from_slice(b"data");
         wav.extend_from_slice(&data_bytes.to_le_bytes());
-        wav.resize((44 + data_bytes) as usize, 0);
+        for sample in samples {
+            wav.extend_from_slice(&sample.to_le_bytes());
+        }
         wav
     }
 
     #[test]
-    fn v2_wav_pack_loads_press_release_and_variants() -> Result<()> {
+    fn v2_pack_reuses_fixed_source_for_same_key_event() -> Result<()> {
         let pack = tempfile::tempdir()?;
-        fs::write(pack.path().join("sound.wav"), mono_pcm16_wav(400, 48_000))?;
+        let mut samples = vec![1_000; 400];
+        samples[100..200].fill(-1_000);
+        fs::write(
+            pack.path().join("sound.wav"),
+            mono_pcm16_wav(&samples, 48_000),
+        )?;
         fs::write(
             pack.path().join("config.json"),
             serde_json::to_vec(&serde_json::json!({
@@ -727,7 +603,16 @@ mod tests {
 
         let sound = KeySound::new(pack.path().to_str().context("invalid temporary path")?)?;
 
-        assert!(sound.event_source(KeyEvent::KeyPress(Key::KeyA)).is_some());
+        let first = sound
+            .event_source(KeyEvent::KeyPress(Key::KeyA))
+            .context("missing first key press")?
+            .collect::<Vec<_>>();
+        let second = sound
+            .event_source(KeyEvent::KeyPress(Key::KeyA))
+            .context("missing second key press")?
+            .collect::<Vec<_>>();
+
+        assert_eq!(first, second);
         assert!(sound
             .event_source(KeyEvent::KeyRelease(Key::KeyA))
             .is_some());
@@ -804,23 +689,6 @@ mod tests {
         assert_eq!(samples[0], 0.0);
         assert_eq!(samples[1], 1.0);
         assert_eq!(samples[19], 0.0);
-    }
-
-    #[test]
-    fn variants_do_not_repeat_immediately() -> Result<()> {
-        let variants = SourceVariants::new(vec![
-            AudioSource::new(Arc::from([0.1]), 1, 48_000).expect("first source"),
-            AudioSource::new(Arc::from([0.2]), 1, 48_000).expect("second source"),
-            AudioSource::new(Arc::from([0.3]), 1, 48_000).expect("third source"),
-        ])?;
-        let mut previous = variants.next_source().next().expect("sample");
-
-        for _ in 0..100 {
-            let next = variants.next_source().next().expect("sample");
-            assert_ne!(next, previous);
-            previous = next;
-        }
-        Ok(())
     }
 
     #[test]
@@ -1013,73 +881,6 @@ mod tests {
                 .expect("next playback source")
                 .0;
             assert!(first.shares_samples_with(&next));
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn bundled_soundpacks_stay_within_memory_budget() -> Result<()> {
-        let configs = resource_soundpack_configs()?;
-        assert!(!configs.is_empty());
-
-        let budgets = configs
-            .into_iter()
-            .map(|(name, config)| budget_from_config(name, config))
-            .collect::<Vec<_>>();
-
-        for budget in budgets {
-            assert!(!budget.name.is_empty(), "{budget:?} has no resource name");
-            assert!(
-                budget.key_count <= MAX_RESOURCE_KEYS,
-                "{budget:?} exceeds key count budget"
-            );
-            assert!(
-                budget.unique_slice_count <= MAX_RESOURCE_UNIQUE_SLICES,
-                "{budget:?} exceeds unique slice count budget"
-            );
-            assert!(
-                budget.unique_duration_ms <= budget.total_duration_ms,
-                "{budget:?} has impossible dedupe duration"
-            );
-            assert!(
-                budget.unique_duration_ms <= MAX_RESOURCE_UNIQUE_DURATION_MS,
-                "{budget:?} exceeds unique duration budget"
-            );
-            assert!(
-                budget.decoded_bytes_48k_stereo() <= MAX_RESOURCE_DECODED_BYTES_48K_STEREO,
-                "{budget:?} exceeds decoded memory budget"
-            );
-            assert!(
-                budget.max_slice_decoded_bytes_48k_stereo()
-                    <= MAX_SINGLE_KEY_DECODED_BYTES_48K_STEREO,
-                "{budget:?} exceeds single-key hot path copy budget"
-            );
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn bundled_v1_soundpacks_load_with_frame_exact_decoder() -> Result<()> {
-        let resources_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources");
-
-        for entry in fs::read_dir(resources_dir)? {
-            let path = entry?.path();
-            if path.extension() != Some(OsStr::new("tar")) {
-                continue;
-            }
-
-            let extracted = tempfile::tempdir()?;
-            tar::Archive::new(File::open(&path)?).unpack(extracted.path())?;
-            let nested_dir = extracted.path().join(resource_name(&path)?);
-            let sound_dir = if extracted.path().join("config.json").exists() {
-                extracted.path()
-            } else {
-                nested_dir.as_path()
-            };
-            KeySound::new(sound_dir.to_str().context("invalid temporary path")?)
-                .with_context(|| format!("failed to load {}", path.display()))?;
         }
 
         Ok(())

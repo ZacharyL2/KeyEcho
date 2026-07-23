@@ -5,7 +5,7 @@ use std::{
         Arc,
     },
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Result;
@@ -15,7 +15,37 @@ use rodio::{
     ChannelCount, DeviceSinkBuilder, MixerDeviceSink, SampleRate, Source,
 };
 
-use super::{listen_key::KeyEvent, PlaybackSoundpack};
+use super::{
+    listen_key::{Key, KeyEvent},
+    PlaybackSoundpack,
+};
+
+// A natural-sounding spread of keys for the pack audition burst (letters of
+// "the quick brown" + space) — no external rng, no meaning beyond variety.
+const SAMPLE_KEYS: [Key; 12] = [
+    Key::KeyT,
+    Key::KeyH,
+    Key::KeyE,
+    Key::Space,
+    Key::KeyQ,
+    Key::KeyU,
+    Key::KeyI,
+    Key::KeyC,
+    Key::KeyK,
+    Key::KeyB,
+    Key::KeyR,
+    Key::KeyN,
+];
+
+// xorshift64 — cheap variety for the audition, not security.
+fn next_rand(state: &mut u64) -> u64 {
+    let mut x = *state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    *state = x;
+    x
+}
 
 const AUDIO_EVENT_QUEUE_CAPACITY: usize = 256;
 const LOW_LATENCY_BUFFER_CANDIDATES: [u32; 3] = [512, 1024, 2048];
@@ -154,6 +184,7 @@ impl AudioOutput {
     }
 }
 
+#[derive(Clone)]
 pub struct SoundPlayer {
     sender: Sender<KeyEvent>,
 }
@@ -198,6 +229,33 @@ impl SoundPlayer {
     pub fn try_play(&self, evt: KeyEvent) {
         let _ = self.sender.try_send(evt);
     }
+
+    // Audition the current pack: fire a short burst of random key presses through
+    // the real sink so selecting a pack reminds you how it sounds (Klack-style).
+    // Non-blocking — a worker paces the burst and exits.
+    pub fn play_sample(&self, count: usize) {
+        let sender = self.sender.clone();
+        thread::spawn(move || {
+            let mut seed = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0x9E37_79B9_7F4A_7C15)
+                | 1; // never zero — xorshift would stick at 0
+                     // Same cadence as the web preview (src/preview.ts): 70–110ms hold,
+                     // 190–330ms press-to-press. Slower than real typing on purpose —
+                     // the ear needs the strokes separated to judge timbre rather than
+                     // hear one rattle.
+            for _ in 0..count {
+                let key = SAMPLE_KEYS[(next_rand(&mut seed) as usize) % SAMPLE_KEYS.len()];
+                let _ = sender.try_send(KeyEvent::KeyPress(key));
+                let hold = 70 + next_rand(&mut seed) % 41;
+                thread::sleep(Duration::from_millis(hold));
+                let _ = sender.try_send(KeyEvent::KeyRelease(key));
+                // press-to-press = hold + this, so 190–330ms overall.
+                thread::sleep(Duration::from_millis(120 + next_rand(&mut seed) % 101));
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -206,7 +264,17 @@ mod tests {
 
     use rodio::Source;
 
-    use super::{AudioSource, LOW_LATENCY_BUFFER_CANDIDATES};
+    use super::{next_rand, AudioSource, LOW_LATENCY_BUFFER_CANDIDATES, SAMPLE_KEYS};
+
+    #[test]
+    fn audition_picks_varied_keys() {
+        // Guards the "stuck seed → same key every press" failure mode.
+        let mut seed = 0x1234_5678_9abc_def0_u64;
+        let picks: std::collections::HashSet<usize> = (0..20)
+            .map(|_| (next_rand(&mut seed) as usize) % SAMPLE_KEYS.len())
+            .collect();
+        assert!(picks.len() > 1, "audition keys should vary");
+    }
 
     #[test]
     fn audio_source_rejects_invalid_format() {

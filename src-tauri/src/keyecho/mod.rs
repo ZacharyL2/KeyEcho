@@ -1,14 +1,16 @@
-use std::collections::HashSet;
-
-use anyhow::{anyhow, Result};
+use std::{collections::HashSet, thread};
 
 mod echo;
 mod listen_key;
 mod soundpack;
 
 pub(super) use echo::AudioSource;
+pub(crate) use echo::SoundPlayer;
 pub(super) use listen_key::{Key, KeyEvent};
-pub(crate) use soundpack::{KeySoundpack, PlaybackSoundpack, SoundOption};
+pub(crate) use soundpack::{
+    import_legacy_packs, legacy_pack_count, pack_has_release, KeySoundpack, PlaybackSoundpack,
+    SoundOption,
+};
 
 #[derive(Default)]
 struct KeyPressGate {
@@ -30,16 +32,25 @@ impl KeyPressGate {
     }
 }
 
-pub fn run_keyecho(playback: PlaybackSoundpack) -> Result<()> {
+// Start the key listener and return a player handle. The listener blocks, so it
+// runs on its own thread; the returned handle lets the UI audition packs (play a
+// sample burst) through the same sink.
+pub fn run_keyecho(playback: PlaybackSoundpack) -> SoundPlayer {
     let player = echo::SoundPlayer::new(playback);
+    let listen_player = player.clone();
 
-    let mut gate = KeyPressGate::default();
-    listen_key::listen(move |evt| {
-        if let Some(evt) = gate.event_to_play(evt) {
-            player.try_play(evt);
+    thread::spawn(move || {
+        let mut gate = KeyPressGate::default();
+        if let Err(err) = listen_key::listen(move |evt| {
+            if let Some(evt) = gate.event_to_play(evt) {
+                listen_player.try_play(evt);
+            }
+        }) {
+            eprintln!("keyecho listener stopped: {err:?}");
         }
-    })
-    .map_err(|err| anyhow!(err))
+    });
+
+    player
 }
 
 #[cfg(test)]

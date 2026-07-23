@@ -5,25 +5,43 @@ import {
   createResource,
   createSignal,
   For,
+  on,
   onCleanup,
   onMount,
   Show,
 } from 'solid-js';
 import type { InferOutput } from 'valibot';
-import { array, literal, object, parseAsync, pipe, string, url } from 'valibot';
+import {
+  array,
+  boolean,
+  literal,
+  number,
+  object,
+  optional,
+  parseAsync,
+  pipe,
+  string,
+  url,
+} from 'valibot';
 
 import iconUrl from '../src-tauri/icons/Square71x71Logo.png';
+import { startBuyFlow, startPackBuyFlow } from './buy';
+import { activationKey, initDeepLinks } from './deeplink';
+import { KEYECHO_ORIGIN } from './origin';
+import { previewPack } from './preview';
 import type { CommandResult, SoundOption } from './services/bindings';
 import { commands } from './services/bindings';
 
-const PACK_CATALOG_URL = 'https://keyecho.app/packs/index.json';
-const GITHUB_SOUND_FALLBACK_URL =
-  'https://api.github.com/repos/ZacharyL2/KeyEcho/contents/src-tauri/resources';
+// v1.1: schemaVersion-2 catalog (free + paid). No GitHub fallback.
+const PACK_CATALOG_URL = `${KEYECHO_ORIGIN}/packs/catalog.json`;
 
-const APP_VERSION = '1.0.0';
-const APP_CAMPAIGN = `v${APP_VERSION.replace(/\./g, '_')}`;
-const KEYECHO_VOTE_URL = `https://keyecho.app/?source=keyecho_app&intent=sound_pack_vote&version=${APP_VERSION}&utm_source=keyecho_app&utm_medium=desktop&utm_campaign=${APP_CAMPAIGN}#queue`;
+const APP_VERSION = '1.1.0';
 const PROJECT_UPDATE_DISMISSED_KEY = `keyecho:v${APP_VERSION}:update-dismissed-session`;
+
+const LICENSE_KEY_STORAGE = 'keyecho:license-key';
+const ENTITLEMENTS_URL = `${KEYECHO_ORIGIN}/packs/entitlements`;
+const PACK_DOWNLOAD_URL = `${KEYECHO_ORIGIN}/packs/download`;
+const RESTORE_URL = `${KEYECHO_ORIGIN}/packs/restore`;
 
 // Pack lists are remote (GitHub) and grow over time, so display names come
 // from token rules rather than a per-pack map: brand tokens that don't
@@ -39,6 +57,7 @@ const SOUND_NAME_TOKENS: Record<string, string> = {
 function displaySoundName(rawName: string): string {
   return rawName
     .replace(/\.tar$/, '')
+    .replace(/^waveapp-/, '') // catalog packIds carry a vendor prefix
     .split('-')
     .map(
       (word) =>
@@ -48,32 +67,34 @@ function displaySoundName(rawName: string): string {
     .join(' ');
 }
 
-const GithubSoundsSchema = array(
-  object({
-    name: string(),
-    type: literal('file'),
-    download_url: pipe(string(), url()),
-  }),
-);
-
 const PackCatalogSchema = object({
-  schemaVersion: literal(1),
+  schemaVersion: literal(2),
   packs: array(
     object({
       id: string(),
       name: string(),
-      downloadUrl: pipe(string(), url()),
+      slug: string(),
+      tier: string(),
+      priceUsd: number(),
+      downloadUrl: optional(pipe(string(), url())),
     }),
   ),
 });
 
-type GithubSound = InferOutput<typeof GithubSoundsSchema>[number];
+const EntitlementsSchema = object({
+  valid: boolean(),
+  packs: optional(array(string())),
+});
+
 type PackCatalog = InferOutput<typeof PackCatalogSchema>;
 
 interface OnlineSound {
-  downloadUrl: string;
+  downloadUrl?: string; // free packs only; paid ones are bought on the web
   id: string;
   name: string;
+  slug: string;
+  tier: string;
+  priceUsd: number;
 }
 
 type ToastTone = 'default' | 'error';
@@ -94,8 +115,44 @@ function unwrapCommand<T>(result: CommandResult<T>): T {
   throw new Error(result.error);
 }
 
-async function loadSounds(): Promise<SoundOption[]> {
-  return unwrapCommand(await commands.getSounds());
+// Installed packs are folders named by slug (crisp-click-bright), but the store
+// sells them under a shorter marketing name (Crisp Click). Resolve through the
+// catalog so both surfaces agree; imported v1 packs aren't in it and keep the
+// name derived from their folder.
+let catalogNameCache: Map<string, string> | null = null;
+
+async function catalogNames(): Promise<Map<string, string>> {
+  if (!catalogNameCache) {
+    try {
+      catalogNameCache = new Map(
+        (await loadOnlineSounds()).map((pack) => [pack.id, pack.name]),
+      );
+    } catch {
+      catalogNameCache = new Map(); // offline -> derived names still work
+    }
+  }
+  return catalogNameCache;
+}
+
+/** Display name for a pack id, usable outside async context. */
+function packLabel(id: string): string {
+  return catalogNameCache?.get(id) ?? displaySoundName(id);
+}
+
+type InstalledSound = SoundOption & { pressOnly: boolean; label: string };
+
+async function loadSounds(): Promise<InstalledSound[]> {
+  const [sounds, pressOnly] = await Promise.all([
+    commands.getSounds(),
+    commands.pressOnlyPacks(),
+  ]);
+  const legacy = new Set(unwrapCommand(pressOnly));
+  const names = await catalogNames();
+  return unwrapCommand(sounds).map((sound) => ({
+    ...sound,
+    pressOnly: legacy.has(sound.value),
+    label: names.get(sound.name) ?? displaySoundName(sound.name),
+  }));
 }
 
 async function loadSelectedSound(): Promise<string | null> {
@@ -117,24 +174,26 @@ async function fetchJson(url: string): Promise<unknown> {
   return response.json();
 }
 
-function soundIdFromArchiveName(name: string): string {
-  return name.replace(/\.tar$/, '');
-}
-
 function mapPackCatalog(catalog: PackCatalog): OnlineSound[] {
-  return catalog.packs.map((pack) => ({
-    downloadUrl: pack.downloadUrl,
-    id: pack.id,
-    name: pack.name,
-  }));
-}
-
-function mapGithubSounds(sounds: GithubSound[]): OnlineSound[] {
-  return sounds.map((sound) => ({
-    downloadUrl: sound.download_url,
-    id: soundIdFromArchiveName(sound.name),
-    name: sound.name,
-  }));
+  // Every released pack is listed so paid ones are discoverable in-app: free
+  // packs carry a downloadUrl (direct CDN), paid ones send you to the web store.
+  return (
+    catalog.packs
+      .map((pack) => ({
+        downloadUrl: pack.downloadUrl,
+        id: pack.id,
+        name: pack.name,
+        slug: pack.slug,
+        tier: pack.tier,
+        priceUsd: pack.priceUsd,
+      }))
+      // Free first (the try-it hook), then paid; each group alphabetical.
+      .sort((a, b) => {
+        const aFree = a.tier === 'free' ? 0 : 1;
+        const bFree = b.tier === 'free' ? 0 : 1;
+        return aFree - bFree || a.name.localeCompare(b.name);
+      })
+  );
 }
 
 async function loadOfficialOnlineSounds(): Promise<OnlineSound[]> {
@@ -143,27 +202,102 @@ async function loadOfficialOnlineSounds(): Promise<OnlineSound[]> {
   );
 }
 
-async function loadFallbackOnlineSounds(): Promise<OnlineSound[]> {
-  return mapGithubSounds(
-    await parseAsync(
-      GithubSoundsSchema,
-      await fetchJson(GITHUB_SOUND_FALLBACK_URL),
-    ),
-  );
+async function loadOnlineSounds(): Promise<OnlineSound[]> {
+  return loadOfficialOnlineSounds();
 }
 
-async function loadOnlineSounds(): Promise<OnlineSound[]> {
+function loadStoredLicenseKey(): string {
   try {
-    return await loadOfficialOnlineSounds();
-  } catch (officialError) {
+    return localStorage.getItem(LICENSE_KEY_STORAGE) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function storeLicenseKey(key: string) {
+  try {
+    if (key) {
+      localStorage.setItem(LICENSE_KEY_STORAGE, key);
+    } else {
+      localStorage.removeItem(LICENSE_KEY_STORAGE);
+    }
+  } catch {
+    // A missing persisted key only means the user re-pastes it next launch.
+  }
+}
+
+function entitlementsUrl(key: string): string {
+  const url = new URL(ENTITLEMENTS_URL);
+  url.searchParams.set('key', key);
+  return url.toString();
+}
+
+function packDownloadUrl(key: string, packId: string): string {
+  const url = new URL(PACK_DOWNLOAD_URL);
+  url.searchParams.set('key', key);
+  url.searchParams.set('pack', packId);
+  return url.toString();
+}
+
+async function fetchEntitledPacks(key: string): Promise<string[]> {
+  const data = await parseAsync(
+    EntitlementsSchema,
+    await fetchJson(entitlementsUrl(key)),
+  );
+  if (!data.valid) {
+    throw new Error('invalid-key');
+  }
+  return data.packs ?? [];
+}
+
+/**
+ * Persist a licence key and install every entitled pack that isn't installed.
+ *
+ * Module scope on purpose: a keyecho://activate deep link has to work whether or
+ * not the License dialog happens to be mounted. Returns the entitled pack ids.
+ */
+async function activateLicense(
+  key: string,
+  notify: Notify,
+  onInstalled?: () => void,
+): Promise<{ entitled: string[]; installed: string[] }> {
+  const packs = await fetchEntitledPacks(key);
+  storeLicenseKey(key);
+
+  const already = new Set((await loadSounds()).map((sound) => sound.name));
+  const installed: string[] = [];
+  for (const packId of packs) {
+    if (already.has(packId)) {
+      continue;
+    }
     try {
-      return await loadFallbackOnlineSounds();
-    } catch (fallbackError) {
-      throw new Error(
-        `Pack catalog failed. Official source: ${officialError}; GitHub fallback: ${fallbackError}`,
-      );
+      unwrapCommand(await commands.downloadSound(packDownloadUrl(key, packId)));
+      installed.push(packId);
+      notify(`'${packLabel(packId)}' downloaded.`);
+      // Refresh per pack, not once at the end: downloads take seconds, and
+      // waiting for the whole batch makes the list look stale after activation.
+      onInstalled?.();
+    } catch (error) {
+      // One failure shouldn't abort the rest of the purchase.
+      notify(`Download failed. Reason: ${error}`, 'error');
     }
   }
+  return { entitled: packs, installed };
+}
+
+/** Arm a pack by id right after install, so a one-pack purchase is audible at
+ *  once. Returns false when the pack isn't in the installed list (yet). */
+async function selectPackById(packId: string): Promise<boolean> {
+  const match = (await loadSounds()).find((sound) => sound.name === packId);
+  if (!match) {
+    return false;
+  }
+  const result = await commands.selectSound(match.value);
+  if (result.status === 'error') {
+    return false;
+  }
+  void commands.previewPackSound(); // audible confirmation of what you bought
+  return true;
 }
 
 function hasDismissedProjectUpdate(): boolean {
@@ -343,11 +477,25 @@ function VolumeSetting(props: { notify: Notify }) {
   );
 }
 
-function SoundSetting(props: { notify: Notify }) {
+function SoundSetting(props: { notify: Notify; reloadSignal: () => number }) {
   const [downloadOpen, setDownloadOpen] = createSignal(false);
   const [sounds, soundControls] = createResource(loadSounds);
   const [selectedSound, selectedSoundControls] =
     createResource(loadSelectedSound);
+
+  // Refetch when packs change elsewhere (licence key, deep link). The selection
+  // can change too — a deep link arms the pack it just installed — so pull both,
+  // otherwise the dropdown keeps showing the previous pack.
+  createEffect(
+    on(
+      props.reloadSignal,
+      () => {
+        void soundControls.refetch();
+        void selectedSoundControls.refetch();
+      },
+      { defer: true },
+    ),
+  );
 
   const soundList = createMemo(() => sounds() ?? []);
   const hasSounds = createMemo(() => soundList().length > 0);
@@ -355,6 +503,7 @@ function SoundSetting(props: { notify: Notify }) {
     soundList().map((sound) => sound.name),
   );
 
+  const [preparing, setPreparing] = createSignal(false);
   const handleSelect = async (sound: string) => {
     if (!sound) {
       return;
@@ -362,23 +511,60 @@ function SoundSetting(props: { notify: Notify }) {
 
     selectedSoundControls.mutate(sound);
 
-    const result = await commands.selectSound(sound);
-    if (result.status === 'error') {
-      props.notify(
-        'Your selected sound needs an update. Please re-download it.',
-        'error',
-      );
-    } else {
-      const soundItem = soundList().find((item) => item.value === sound);
-      props.notify(
-        `'${displaySoundName(soundItem?.name ?? 'Sound')}' chosen successfully.`,
-      );
+    // Selecting decodes the whole pack in Rust, which takes a moment — without
+    // this the panel looks idle and the audition seems to fire late.
+    setPreparing(true);
+    try {
+      const result = await commands.selectSound(sound);
+      if (result.status === 'error') {
+        props.notify(
+          'Your selected sound needs an update. Please re-download it.',
+          'error',
+        );
+      } else {
+        const soundItem = soundList().find((item) => item.value === sound);
+        props.notify(`'${soundItem?.label ?? 'Sound'}' chosen successfully.`);
+        void commands.previewPackSound(); // audition the pack so you hear what you picked
+      }
+    } finally {
+      setPreparing(false);
     }
 
     await selectedSoundControls.refetch();
   };
 
+  const [importing, setImporting] = createSignal(false);
+  // Only mention importing when v1 packs actually exist on this machine.
+  const [legacyCount, legacyControls] = createResource(async () => {
+    const result = await commands.legacyPacksAvailable();
+    return result.status === 'ok' ? result.data : 0;
+  });
+  const hasLegacy = () => (legacyCount() ?? 0) > 0;
+  const handleImport = async () => {
+    setImporting(true);
+    try {
+      const result = await commands.importSoundPack();
+      if (result.status === 'error') {
+        props.notify('Could not import your previous packs.', 'error');
+        return;
+      }
+      if (result.data.length === 0) {
+        props.notify('No packs found from a previous KeyEcho version.');
+        return;
+      }
+      await Promise.all([soundControls.refetch(), legacyControls.refetch()]);
+      props.notify(
+        `Imported ${result.data.length} v1 pack${result.data.length > 1 ? 's' : ''}. These play a press sound only — packs from Browse also have a key-up sound.`,
+      );
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const status = () => {
+    if (preparing()) {
+      return 'PREPARING SOUND…';
+    }
     if (sounds.loading) {
       return 'LOADING PACKS…';
     }
@@ -403,36 +589,99 @@ function SoundSetting(props: { notify: Notify }) {
         </span>
       </div>
 
-      <select
-        aria-label="Sound"
-        class="ui-field select-field w-full"
-        disabled={sounds.loading || !hasSounds()}
-        value={selectedSound() ?? ''}
-        onChange={(event) => handleSelect(event.currentTarget.value)}
-      >
-        <option disabled value="">
-          {hasSounds() ? 'Select a pack' : 'No packs installed yet'}
-        </option>
-        <For each={soundList()}>
-          {(sound) => (
-            <option value={sound.value}>{displaySoundName(sound.name)}</option>
-          )}
-        </For>
-      </select>
+      <Show
+        fallback={
+          // Empty bay: same footprint as the loaded selector, so the panel keeps
+          // its height and its left-aligned grid instead of a centered block.
+          <div class="space-y-3">
+            {/* Same bordered field the selector will be — reads as "this is
+                where a pack goes", just empty. */}
+            <div class="ui-field pack-empty-field w-full">No pack loaded</div>
 
-      <div class="flex items-center justify-between gap-4">
-        <Show fallback={<span />} when={sounds.error}>
-          <p class="text-sm text-destructive">Sound list failed to load.</p>
-        </Show>
-        <button
-          class={`${hasSounds() ? 'secondary-button' : 'primary-button'} shrink-0`}
-          disabled={sounds.loading}
-          type="button"
-          onClick={() => setDownloadOpen(true)}
+            {/* Upgrading from v1 is the one case where the app looks broken
+                ("my sounds are gone"), so say so plainly and lead with the fix. */}
+            <Show when={hasLegacy()}>
+              <p class="pack-recover-note">
+                Upgrading from KeyEcho v1? Your {legacyCount()} pack
+                {legacyCount() === 1 ? '' : 's'} are still on this Mac.
+              </p>
+            </Show>
+
+            <div class="flex items-center justify-between gap-4">
+              <Show fallback={<span />} when={hasLegacy()}>
+                <button
+                  class="secondary-button shrink-0"
+                  disabled={importing()}
+                  type="button"
+                  onClick={handleImport}
+                >
+                  {importing()
+                    ? 'Importing…'
+                    : `Import ${legacyCount()} v1 pack${legacyCount() === 1 ? '' : 's'}`}
+                </button>
+              </Show>
+              <button
+                class="primary-button shrink-0"
+                disabled={sounds.loading}
+                type="button"
+                onClick={() => setDownloadOpen(true)}
+              >
+                Browse packs
+              </button>
+            </div>
+          </div>
+        }
+        when={hasSounds()}
+      >
+        <select
+          aria-busy={preparing()}
+          aria-label="Sound"
+          class="ui-field select-field w-full"
+          classList={{ 'is-preparing': preparing() }}
+          disabled={sounds.loading || preparing()}
+          value={selectedSound() ?? ''}
+          onChange={(event) => handleSelect(event.currentTarget.value)}
         >
-          Browse packs…
-        </button>
-      </div>
+          <option disabled value="">
+            Select a pack
+          </option>
+          <For each={soundList()}>
+            {(sound) => (
+              <option value={sound.value}>
+                {sound.label}
+                {sound.pressOnly ? ' · press only (v1)' : ''}
+              </option>
+            )}
+          </For>
+        </select>
+
+        <div class="flex items-center justify-between gap-4">
+          <Show fallback={<span />} when={sounds.error}>
+            <p class="text-sm text-destructive">Sound list failed to load.</p>
+          </Show>
+          <div class="flex shrink-0 items-center gap-2">
+            <Show when={hasLegacy()}>
+              <button
+                class="secondary-button shrink-0"
+                disabled={importing()}
+                title="One-off: bring in your packs from KeyEcho v1. They play a press sound only — no key-up sound. Nothing is uploaded."
+                type="button"
+                onClick={handleImport}
+              >
+                {importing() ? 'Importing…' : `Import v1 (${legacyCount()})`}
+              </button>
+            </Show>
+            <button
+              class="secondary-button shrink-0"
+              disabled={sounds.loading}
+              type="button"
+              onClick={() => setDownloadOpen(true)}
+            >
+              Browse packs…
+            </button>
+          </div>
+        </div>
+      </Show>
 
       <DownloadDialog
         existedSoundNames={existedSoundNames()}
@@ -484,6 +733,9 @@ function DownloadDialog(props: {
   };
 
   const handleDownload = async (sound: OnlineSound) => {
+    if (!sound.downloadUrl) {
+      return;
+    }
     setDownloadingName(sound.name);
 
     try {
@@ -495,6 +747,17 @@ function DownloadDialog(props: {
       props.notify(`Download failed. Reason: ${error}`, 'error');
     } finally {
       setDownloadingName(null);
+    }
+  };
+
+  const handlePreview = async (sound: OnlineSound) => {
+    try {
+      await previewPack(sound.id);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      // eslint-disable-next-line no-console
+      console.error('[keyecho] preview failed', sound.id, error);
+      props.notify(`Preview failed (${sound.id}): ${reason}`, 'error');
     }
   };
 
@@ -544,24 +807,70 @@ function DownloadDialog(props: {
                     const isDownloading = () =>
                       downloadingName() === sound.name;
 
+                    const isPaid = () => sound.tier !== 'free';
+
                     return (
-                      <div class="sound-download-row">
-                        <span class="sound-download-name" title={sound.name}>
-                          {displaySoundName(sound.name)}
-                        </span>
+                      <div class="sound-download-row has-preview">
                         <button
-                          class={`${isExisted() ? 'secondary-button' : 'primary-button'} sound-download-action`}
-                          disabled={downloadingName() !== null}
+                          aria-label={`Preview ${sound.name}`}
+                          class="secondary-button sound-preview-action"
+                          title="Hear a few keys"
                           type="button"
-                          onClick={() => handleDownload(sound)}
+                          onClick={() => handlePreview(sound)}
                         >
-                          <Show
-                            fallback={isExisted() ? 'Redownload' : 'Download'}
-                            when={isDownloading()}
-                          >
-                            Saving...
-                          </Show>
+                          ▶
                         </button>
+                        {/* Already the catalog's marketing name — don't run it
+                            through the slug deriver, which splits on hyphens. */}
+                        <span class="sound-download-name" title={sound.name}>
+                          {sound.name}
+                        </span>
+                        <span class="mono-label sound-download-price">
+                          {isPaid() ? `$${sound.priceUsd.toFixed(2)}` : 'FREE'}
+                        </span>
+                        <Show
+                          fallback={
+                            // Already installed = already bought. Re-downloading
+                            // a paid pack needs the licence key, so that lives in
+                            // the License dialog, not here — state, not action.
+                            <Show
+                              fallback={
+                                <span class="mono-label sound-download-owned">
+                                  Installed
+                                </span>
+                              }
+                              when={!isExisted()}
+                            >
+                              <button
+                                class="secondary-button sound-download-action"
+                                type="button"
+                                onClick={() =>
+                                  void startPackBuyFlow(
+                                    sound.slug,
+                                    props.notify,
+                                  )
+                                }
+                              >
+                                Get
+                              </button>
+                            </Show>
+                          }
+                          when={!isPaid()}
+                        >
+                          <button
+                            class={`${isExisted() ? 'secondary-button' : 'primary-button'} sound-download-action`}
+                            disabled={downloadingName() !== null}
+                            type="button"
+                            onClick={() => handleDownload(sound)}
+                          >
+                            <Show
+                              fallback={isExisted() ? 'Redownload' : 'Download'}
+                              when={isDownloading()}
+                            >
+                              Saving...
+                            </Show>
+                          </button>
+                        </Show>
                       </div>
                     );
                   }}
@@ -594,6 +903,302 @@ function DownloadDialog(props: {
   );
 }
 
+// License lives in a dialog off the header — it's a rare, paid-only errand, so
+// it shouldn't take permanent space in a panel most users never buy from.
+function LicenseDialog(props: {
+  notify: Notify;
+  open: boolean;
+  onClose: () => void;
+  onSoundsChanged: () => void;
+}) {
+  return (
+    <Show when={props.open}>
+      <div
+        class="dialog-backdrop"
+        onClick={(event) => {
+          if (event.target === event.currentTarget) {
+            props.onClose();
+          }
+        }}
+      >
+        <section class="dialog-panel">
+          <header class="dialog-header">
+            <h2 class="dialog-title">License</h2>
+            <button
+              aria-label="Close"
+              class="icon-button"
+              type="button"
+              onClick={props.onClose}
+            >
+              <span aria-hidden="true" class="close-icon" />
+            </button>
+          </header>
+
+          <div class="dialog-body">
+            <div class="px-4 py-4">
+              <LicenseSetting
+                notify={props.notify}
+                onSoundsChanged={props.onSoundsChanged}
+              />
+            </div>
+          </div>
+
+          <footer class="dialog-footer">
+            <button
+              class="secondary-button"
+              type="button"
+              onClick={props.onClose}
+            >
+              Close
+            </button>
+          </footer>
+        </section>
+      </div>
+    </Show>
+  );
+}
+
+function LicenseSetting(props: {
+  notify: Notify;
+  onSoundsChanged: () => void;
+}) {
+  const [key, setKey] = createSignal(loadStoredLicenseKey());
+  const [entitled, setEntitled] = createSignal<string[] | null>(null);
+  const [checking, setChecking] = createSignal(false);
+  const [checkError, setCheckError] = createSignal<string | null>(null);
+  const [downloadingPack, setDownloadingPack] = createSignal<string | null>(
+    null,
+  );
+  const [restoreOpen, setRestoreOpen] = createSignal(false);
+  const [restoreEmail, setRestoreEmail] = createSignal('');
+  const [restoring, setRestoring] = createSignal(false);
+  const [installed, installedControls] = createResource(async () => {
+    return new Set((await loadSounds()).map((sound) => sound.name));
+  });
+
+  const isInstalled = (packId: string) => installed()?.has(packId) ?? false;
+
+  const download = async (packId: string) => {
+    setDownloadingPack(packId);
+    try {
+      unwrapCommand(
+        await commands.downloadSound(packDownloadUrl(key().trim(), packId)),
+      );
+      await installedControls.refetch();
+      props.onSoundsChanged();
+      props.notify(`'${packLabel(packId)}' downloaded.`);
+    } catch (error) {
+      props.notify(`Download failed. Reason: ${error}`, 'error');
+    } finally {
+      setDownloadingPack(null);
+    }
+  };
+
+  const check = async () => {
+    const trimmed = key().trim();
+    if (!trimmed) {
+      setCheckError('Enter your license key.');
+      setEntitled(null);
+      return;
+    }
+
+    setChecking(true);
+    setCheckError(null);
+    try {
+      const { entitled } = await activateLicense(trimmed, props.notify, () => {
+        void installedControls.refetch();
+        props.onSoundsChanged();
+      });
+      setEntitled(entitled);
+      setKey(trimmed);
+      props.notify(
+        entitled.length
+          ? `License restored — ${entitled.length} pack${entitled.length === 1 ? '' : 's'} available.`
+          : 'License valid, but no packs are entitled yet.',
+      );
+      await installedControls.refetch();
+      props.onSoundsChanged();
+    } catch (error) {
+      setEntitled(null);
+      setCheckError(
+        error instanceof Error && error.message === 'invalid-key'
+          ? 'License key not recognized.'
+          : `Could not reach the license server. Reason: ${error}`,
+      );
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const forget = () => {
+    storeLicenseKey('');
+    setKey('');
+    setEntitled(null);
+    setCheckError(null);
+  };
+
+  // Restore-by-email: the endpoint never reveals whether the address had
+  // purchases, so any completed request shows the same confirmation; only a
+  // network failure is surfaced as an error.
+  const restore = async () => {
+    const email = restoreEmail().trim();
+    if (!email) {
+      return;
+    }
+    setRestoring(true);
+    try {
+      await fetch(RESTORE_URL, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      props.notify('Check your email — we sent your key(s).');
+      setRestoreOpen(false);
+      setRestoreEmail('');
+    } catch {
+      props.notify(
+        "Couldn't reach the server. Try again in a moment.",
+        'error',
+      );
+    } finally {
+      setRestoring(false);
+    }
+  };
+
+  onMount(() => {
+    if (key().trim()) {
+      void check();
+    }
+  });
+
+  return (
+    <div class="space-y-3">
+      <div class="flex items-baseline justify-between gap-4">
+        <span class="mono-label mono-red">License Key</span>
+        <Show when={entitled() !== null}>
+          <button
+            class="mono-label card-foot-link"
+            type="button"
+            onClick={forget}
+          >
+            Forget key
+          </button>
+        </Show>
+      </div>
+
+      <form
+        class="flex items-center gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void check();
+        }}
+      >
+        <input
+          aria-label="License key"
+          autocomplete="off"
+          class="ui-field w-full"
+          placeholder="KE1.…"
+          spellcheck={false}
+          value={key()}
+          onInput={(event) => setKey(event.currentTarget.value)}
+        />
+        <button
+          class="primary-button shrink-0"
+          disabled={checking()}
+          type="submit"
+        >
+          <Show fallback="Restore" when={checking()}>
+            Checking…
+          </Show>
+        </button>
+      </form>
+
+      <Show when={checkError()}>
+        <p class="text-sm text-destructive">{checkError()}</p>
+      </Show>
+
+      <div>
+        <button
+          class="mono-label card-foot-link"
+          type="button"
+          onClick={() => setRestoreOpen((open) => !open)}
+        >
+          Lost your key? Restore by email
+        </button>
+        <Show when={restoreOpen()}>
+          <form
+            class="mt-2 flex items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void restore();
+            }}
+          >
+            <input
+              aria-label="Email for restore"
+              autocomplete="email"
+              class="ui-field w-full"
+              placeholder="you@example.com"
+              type="email"
+              value={restoreEmail()}
+              onInput={(event) => setRestoreEmail(event.currentTarget.value)}
+            />
+            <button
+              class="primary-button shrink-0"
+              disabled={restoring()}
+              type="submit"
+            >
+              <Show fallback="Send" when={restoring()}>
+                Sending…
+              </Show>
+            </button>
+          </form>
+        </Show>
+      </div>
+
+      <Show when={entitled()}>
+        {(packs) => (
+          <Show
+            fallback={
+              <p class="mono-label">No packs entitled to this key yet.</p>
+            }
+            when={packs().length > 0}
+          >
+            {/* Rows sit flush like the browse dialog's: the separator is a
+                border-top between adjacent rows, so a gap here would leave the
+                hairline floating. */}
+            <div>
+              <For each={packs()}>
+                {(packId) => (
+                  <div class="sound-download-row">
+                    <span class="sound-download-name" title={packId}>
+                      {packLabel(packId)}
+                    </span>
+                    <button
+                      class={`${isInstalled(packId) ? 'secondary-button' : 'primary-button'} sound-download-action`}
+                      disabled={downloadingPack() !== null}
+                      type="button"
+                      onClick={() => download(packId)}
+                    >
+                      <Show
+                        fallback={
+                          isInstalled(packId) ? 'Redownload' : 'Download'
+                        }
+                        when={downloadingPack() === packId}
+                      >
+                        Saving…
+                      </Show>
+                    </button>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
+        )}
+      </Show>
+    </div>
+  );
+}
+
 function SettingRow(props: { label: string; children: JSX.Element }) {
   return (
     <div class="grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 py-2">
@@ -608,12 +1213,11 @@ function ProjectUpdateCard(props: { notify: Notify; onDismiss: () => void }) {
     <section class="project-update">
       <div class="min-w-0">
         <p class="project-update-kicker">v{APP_VERSION}</p>
-        <h3 class="project-update-title">
-          KeyEcho is back — shape its first packs
-        </h3>
+        <h3 class="project-update-title">New sound catalog</h3>
         <p class="project-update-copy">
-          Rebuilt on Tauri 2, still free and open source. Studio-recorded packs
-          are next: your vote decides what gets recorded first.
+          A growing catalog of carefully crafted packs, free and paid. Preview
+          any of them in your browser, then unlock the ones you like with a
+          license key.
         </p>
       </div>
 
@@ -621,9 +1225,9 @@ function ProjectUpdateCard(props: { notify: Notify; onDismiss: () => void }) {
         <button
           class="primary-button project-update-button"
           type="button"
-          onClick={() => openExternalUrl(KEYECHO_VOTE_URL, props.notify)}
+          onClick={() => void startBuyFlow(props.notify)}
         >
-          Vote packs
+          Browse packs
         </button>
       </div>
 
@@ -641,6 +1245,43 @@ function ProjectUpdateCard(props: { notify: Notify; onDismiss: () => void }) {
 
 export default function App() {
   const notifier = createNotifier();
+  const [soundsVersion, setSoundsVersion] = createSignal(0);
+  // Paid-only: keep the license box out of free users' way behind a toggle.
+  const [licenseOpen, setLicenseOpen] = createSignal(false);
+
+  // Deep-link activation lives here, not in LicenseSetting: that component only
+  // mounts while the License dialog is open, so a keyecho://activate link
+  // arriving with the dialog closed used to activate but install nothing.
+  createEffect(
+    on(
+      activationKey,
+      (incoming) => {
+        const trimmed = incoming?.trim();
+        if (!trimmed) {
+          return;
+        }
+        const refresh = () => setSoundsVersion((value) => value + 1);
+        void activateLicense(trimmed, notifier.notify, refresh)
+          .then(async ({ entitled }) => {
+            refresh();
+            // You just bought this and clicked "Open in KeyEcho" — arm it rather
+            // than making you hunt for it. On a bundle this is the pack you
+            // picked first, which beats leaving nothing selected.
+            const first = entitled[0];
+            if (first && (await selectPackById(first))) {
+              refresh();
+            }
+          })
+          .catch((error: unknown) => {
+            notifier.notify(
+              `Could not activate that key. Reason: ${error}`,
+              'error',
+            );
+          });
+      },
+      { defer: true },
+    ),
+  );
   const [projectUpdateVisible, setProjectUpdateVisible] = createSignal(
     !hasDismissedProjectUpdate(),
   );
@@ -655,6 +1296,8 @@ export default function App() {
     setProjectUpdateVisible(false);
   };
 
+  onMount(() => void initDeepLinks(notifier.notify));
+
   return (
     <>
       <main class="flex h-full flex-col overflow-y-auto bg-background p-4 text-foreground">
@@ -664,7 +1307,9 @@ export default function App() {
             <h1 class="text-[0.9375rem] font-semibold tracking-tight">
               KeyEcho
             </h1>
-            <div class="ml-auto">
+            {/* License stays rightmost so it never shifts when What's New
+                appears or is dismissed. */}
+            <div class="ml-auto flex items-center gap-2">
               <Show when={!projectUpdateVisible()}>
                 <button
                   class="secondary-button whats-new-button"
@@ -674,11 +1319,21 @@ export default function App() {
                   What's New
                 </button>
               </Show>
+              <button
+                class="secondary-button whats-new-button"
+                type="button"
+                onClick={() => setLicenseOpen(true)}
+              >
+                License
+              </button>
             </div>
           </header>
 
           <div class="px-5 py-3">
-            <SoundSetting notify={notifier.notify} />
+            <SoundSetting
+              notify={notifier.notify}
+              reloadSignal={soundsVersion}
+            />
           </div>
 
           <div class="divide-y divide-border border-t border-border px-5">
@@ -690,6 +1345,13 @@ export default function App() {
               <VolumeSetting notify={notifier.notify} />
             </SettingRow>
           </div>
+
+          <LicenseDialog
+            notify={notifier.notify}
+            open={licenseOpen()}
+            onClose={() => setLicenseOpen(false)}
+            onSoundsChanged={() => setSoundsVersion((value) => value + 1)}
+          />
 
           <Show when={projectUpdateVisible()}>
             <ProjectUpdateCard

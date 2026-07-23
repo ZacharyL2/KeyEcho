@@ -108,6 +108,7 @@ pub enum Key {
     Kp8,
     Kp9,
     KpDelete,
+    #[serde(alias = "Fn")]
     Function,
     Unknown(u32),
 }
