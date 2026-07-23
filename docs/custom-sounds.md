@@ -89,14 +89,15 @@ This guide will walk you through the process of creating and adding custom keybo
 
 1. **File Organization**
    - Create a new directory for your sound pack in:
-     `/Users/{your_username}/Library/Application Support/xyz.waveapps.keyecho/sounds/`
-   - `xyz.waveapps.keyecho` is KeyEcho's historical app data identifier. It is
-     kept for upgrade compatibility.
+     `/Users/{your_username}/Library/Application Support/app.keyecho.keyecho/sounds/`
+   - Existing data under the historical `xyz.waveapps.keyecho` directory is
+     copied into `app.keyecho.keyecho` automatically after upgrading. The old directory
+     is left in place as a rollback safeguard.
    - Use lowercase letters and underscores for directory and filenames
    - Example structure:
 
      ```bash
-     /Users/{your_username}/Library/Application Support/xyz.waveapps.keyecho/sounds/your_soundpack_name/
+     /Users/{your_username}/Library/Application Support/app.keyecho.keyecho/sounds/your_soundpack_name/
      ├── sound.ogg
      └── config.json
      ```

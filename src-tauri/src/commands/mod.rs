@@ -7,12 +7,15 @@ use std::{
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use reqwest::Url;
 use tar::EntryType;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::{
     global_state::KeySoundpackState,
-    keyecho::{KeySoundpack, SoundOption},
+    keyecho::{
+        import_legacy_packs, legacy_pack_count, pack_has_release, KeySoundpack, SoundOption,
+        SoundPlayer,
+    },
 };
 
 mod error;
@@ -27,6 +30,8 @@ const SOUND_DOWNLOAD_REPO: &str = "KeyEcho";
 const SOUND_DOWNLOAD_PACKS_PATH: &str = "packs";
 const KEYECHO_APP_HOST: &str = "keyecho.app";
 const KEYECHO_APP_WWW_HOST: &str = "www.keyecho.app";
+// v1.1: free packs download straight from the R2 CDN.
+const KEYECHO_CDN_HOST: &str = "cdn.keyecho.app";
 const GITHUB_HOST: &str = "github.com";
 
 fn with_soundpack<F, R, E>(soundpack: KeySoundpackState, f: F) -> CmdResult<R>
@@ -53,8 +58,18 @@ pub fn get_volume(soundpack: KeySoundpackState) -> CmdResult<f32> {
 }
 
 #[tauri::command]
-pub fn select_sound(soundpack: KeySoundpackState, sound: String) -> CmdResult<()> {
-    with_soundpack(soundpack, |s| s.select_sound(sound))
+pub async fn select_sound(soundpack: KeySoundpackState<'_>, sound: String) -> CmdResult<()> {
+    let soundpack = soundpack.inner().clone();
+    let prepared = tauri::async_runtime::spawn_blocking(move || KeySoundpack::prepare_sound(sound))
+        .await
+        .map_err(|error| anyhow!("soundpack loading task failed: {error}"))??;
+
+    let result = soundpack
+        .lock()
+        .map_err(|_| anyhow!("error when get soundpack"))?
+        .select_prepared_sound(prepared)
+        .map_err(Into::into);
+    result
 }
 
 #[tauri::command]
@@ -67,7 +82,44 @@ pub fn get_sounds(soundpack: KeySoundpackState) -> CmdResult<Vec<SoundOption>> {
     with_soundpack(soundpack, |s| anyhow::Ok(s.sounds.clone()))
 }
 
+// Installed packs with no key-up samples — i.e. imported v1 packs. Computed
+// fresh from each pack's config rather than persisted, so it can't go stale.
+#[tauri::command]
+pub fn press_only_packs(soundpack: KeySoundpackState) -> CmdResult<Vec<String>> {
+    let values = with_soundpack(soundpack, |s| {
+        anyhow::Ok(s.sounds.iter().map(|o| o.value.clone()).collect::<Vec<_>>())
+    })?;
+    Ok(values
+        .into_iter()
+        .filter(|value| !pack_has_release(value))
+        .collect())
+}
+
+// v1 packs available to import. 0 = nothing to recover, so the UI can stay quiet.
+#[tauri::command]
+pub fn legacy_packs_available(app: AppHandle) -> usize {
+    legacy_pack_count(&app)
+}
+
+// Dev-only escape hatch so VITE_KEYECHO_ORIGIN=http://localhost:3999 can be
+// exercised end to end. Compiled out of release builds, which keep the strict
+// allowlist that stops a compromised webview opening or fetching anything.
+#[cfg(debug_assertions)]
+fn is_local_dev_url(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && matches!(url.host_str(), Some("localhost" | "127.0.0.1"))
+}
+
+#[cfg(not(debug_assertions))]
+fn is_local_dev_url(_url: &Url) -> bool {
+    false
+}
+
 fn validate_sound_download_url(url: &Url) -> Result<()> {
+    if is_local_dev_url(url) {
+        return Ok(());
+    }
+
     ensure!(
         url.scheme() == "https",
         "sound downloads must use HTTPS URLs"
@@ -79,7 +131,8 @@ fn validate_sound_download_url(url: &Url) -> Result<()> {
         }
         Some(host)
             if host.eq_ignore_ascii_case(KEYECHO_APP_HOST)
-                || host.eq_ignore_ascii_case(KEYECHO_APP_WWW_HOST) =>
+                || host.eq_ignore_ascii_case(KEYECHO_APP_WWW_HOST)
+                || host.eq_ignore_ascii_case(KEYECHO_CDN_HOST) =>
         {
             validate_keyecho_sound_download_url(url)?
         }
@@ -87,7 +140,8 @@ fn validate_sound_download_url(url: &Url) -> Result<()> {
     }
 
     ensure!(
-        sound_archive_filename(url).is_some_and(|filename| filename.ends_with(".tar")),
+        keyecho_gated_pack_id(url).is_some()
+            || sound_archive_filename(url).is_some_and(|filename| filename.ends_with(".tar")),
         "sound downloads must be .tar archives"
     );
 
@@ -126,6 +180,30 @@ fn validate_keyecho_sound_download_url(url: &Url) -> Result<()> {
     Ok(())
 }
 
+// Entitlement-gated endpoint: /packs/download?key=<key>&pack=<packId> streams a
+// tar without a .tar filename, so it's named by the (sanitized) pack param.
+fn keyecho_gated_pack_id(url: &Url) -> Option<String> {
+    let host = url.host_str()?;
+    if !(host.eq_ignore_ascii_case(KEYECHO_APP_HOST)
+        || host.eq_ignore_ascii_case(KEYECHO_APP_WWW_HOST)
+        || is_local_dev_url(url))
+    {
+        return None;
+    }
+    if url.path() != "/packs/download" {
+        return None;
+    }
+    let pack = url
+        .query_pairs()
+        .find(|(key, _)| key == "pack")
+        .map(|(_, value)| value.into_owned())?;
+    let safe = !pack.is_empty()
+        && pack
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    safe.then_some(pack)
+}
+
 fn sound_archive_filename(url: &Url) -> Option<&str> {
     url.path_segments()?
         .next_back()
@@ -133,6 +211,10 @@ fn sound_archive_filename(url: &Url) -> Option<&str> {
 }
 
 fn sound_name_from_url(url: &Url) -> String {
+    if let Some(pack) = keyecho_gated_pack_id(url) {
+        return pack;
+    }
+
     sound_archive_filename(url)
         .and_then(|filename| filename.strip_suffix(".tar"))
         .filter(|name| !name.is_empty())
@@ -141,6 +223,10 @@ fn sound_name_from_url(url: &Url) -> String {
 }
 
 fn validate_external_url(url: &Url) -> Result<()> {
+    if is_local_dev_url(url) {
+        return Ok(());
+    }
+
     ensure!(url.scheme() == "https", "external links must use HTTPS");
 
     match url.host_str() {
@@ -285,6 +371,34 @@ pub async fn download_sound(
     Ok(())
 }
 
+// Import the user's own v1 packs from the fixed legacy path (no picker — it's
+// deterministic). Content-neutral: the audio is the user's local v1 data,
+// nothing is fetched or hosted.
+#[tauri::command]
+pub fn import_sound_pack(
+    app: AppHandle,
+    soundpack: KeySoundpackState<'_>,
+) -> CmdResult<Vec<SoundOption>> {
+    let imported = import_legacy_packs(&app)?;
+    let options = imported.clone();
+    with_soundpack(soundpack, |s| {
+        for option in options {
+            s.insert_sound(option)?;
+        }
+        anyhow::Ok(())
+    })?;
+    Ok(imported)
+}
+
+// Audition the current pack — a short burst of random keys through the real
+// sink, so choosing a pack reminds you how it sounds.
+#[tauri::command]
+pub fn preview_pack_sound(player: State<SoundPlayer>) {
+    // 3, not the browse preview's 4: this one fires on every pack switch, so it
+    // stays shorter to avoid wearing out its welcome.
+    player.play_sample(3);
+}
+
 #[tauri::command]
 pub fn open_external_url(app: AppHandle, url: String) -> CmdResult<()> {
     let parsed = Url::parse(&url).context("invalid external URL")?;
@@ -334,6 +448,29 @@ mod tests {
     }
 
     #[test]
+    fn keyecho_gated_download_url_is_allowed_and_named_by_pack() {
+        let url = Url::parse(
+            "https://keyecho.app/packs/download?key=KE1.abc.def&pack=waveapp-lunalogs-taptune",
+        )
+        .expect("valid url");
+
+        validate_sound_download_url(&url).expect("gated download URL");
+        assert_eq!(sound_name_from_url(&url), "waveapp-lunalogs-taptune");
+    }
+
+    #[test]
+    fn keyecho_gated_download_url_rejects_bad_requests() {
+        for raw_url in [
+            "https://keyecho.app/packs/download?key=k",
+            "https://keyecho.app/packs/download?key=k&pack=../escape",
+            "https://keyecho.app/packs/other?key=k&pack=nk-cream",
+        ] {
+            let url = Url::parse(raw_url).expect("valid url");
+            assert!(validate_sound_download_url(&url).is_err(), "{raw_url}");
+        }
+    }
+
+    #[test]
     fn sound_download_url_rejects_untrusted_sources() {
         for raw_url in [
             "http://raw.githubusercontent.com/ZacharyL2/KeyEcho/main/src-tauri/resources/a.tar",
@@ -346,6 +483,25 @@ mod tests {
             let url = Url::parse(raw_url).expect("valid url");
             assert!(validate_sound_download_url(&url).is_err());
         }
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn dev_builds_allow_a_localhost_store_but_release_builds_do_not() {
+        // Guards the VITE_KEYECHO_ORIGIN local-testing path. The cfg gate is the
+        // security boundary: this branch does not exist in release builds.
+        for raw_url in [
+            "http://localhost:3999/packs",
+            "http://localhost:3999/packs/download?key=k&pack=thockify-deep",
+            "http://127.0.0.1:3999/packs",
+        ] {
+            let url = Url::parse(raw_url).expect("valid url");
+            validate_external_url(&url).expect("dev localhost allowed");
+            validate_sound_download_url(&url).expect("dev localhost download allowed");
+        }
+        // Still not a free-for-all: other hosts stay blocked even in dev.
+        let evil = Url::parse("http://evil.example/packs").expect("valid url");
+        assert!(validate_external_url(&evil).is_err());
     }
 
     #[test]

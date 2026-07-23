@@ -5,18 +5,50 @@ use std::{
         Arc,
     },
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Result;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use rodio::{
-    cpal::ErrorKind, ChannelCount, DeviceSinkBuilder, MixerDeviceSink, SampleRate, Source,
+    cpal::{BufferSize, ErrorKind},
+    ChannelCount, DeviceSinkBuilder, MixerDeviceSink, SampleRate, Source,
 };
 
-use super::{listen_key::Key, PlaybackSoundpack};
+use super::{
+    listen_key::{Key, KeyEvent},
+    PlaybackSoundpack,
+};
+
+// A natural-sounding spread of keys for the pack audition burst (letters of
+// "the quick brown" + space) — no external rng, no meaning beyond variety.
+const SAMPLE_KEYS: [Key; 12] = [
+    Key::KeyT,
+    Key::KeyH,
+    Key::KeyE,
+    Key::Space,
+    Key::KeyQ,
+    Key::KeyU,
+    Key::KeyI,
+    Key::KeyC,
+    Key::KeyK,
+    Key::KeyB,
+    Key::KeyR,
+    Key::KeyN,
+];
+
+// xorshift64 — cheap variety for the audition, not security.
+fn next_rand(state: &mut u64) -> u64 {
+    let mut x = *state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    *state = x;
+    x
+}
 
 const AUDIO_EVENT_QUEUE_CAPACITY: usize = 256;
+const LOW_LATENCY_BUFFER_CANDIDATES: [u32; 3] = [512, 1024, 2048];
 
 #[derive(Debug, Clone)]
 pub struct AudioSource {
@@ -84,6 +116,17 @@ impl Source for AudioSource {
     }
 }
 
+/// Errors meaning the output stream is gone and the sink must be reopened on
+/// the new default device. cpal reroutes to the new default itself; when it
+/// can't, it reports one of these and we reopen. Named so the classification
+/// is testable. See the rodio pin note in Cargo.toml.
+fn is_stream_lost(kind: &ErrorKind) -> bool {
+    matches!(
+        kind,
+        ErrorKind::DeviceNotAvailable | ErrorKind::StreamInvalidated
+    )
+}
+
 struct AudioOutput {
     sink: MixerDeviceSink,
     stream_failed: Arc<AtomicBool>,
@@ -94,19 +137,36 @@ impl AudioOutput {
         let stream_failed = Arc::new(AtomicBool::new(false));
         let stream_failed_callback = Arc::clone(&stream_failed);
 
-        let mut sink = DeviceSinkBuilder::from_default_device()
-            .ok()?
-            .with_error_callback(move |err| {
-                if matches!(
-                    err.kind(),
-                    ErrorKind::DeviceNotAvailable | ErrorKind::StreamInvalidated
-                ) {
-                    stream_failed_callback.store(true, Ordering::Release);
-                    eprintln!("audio stream requires reopen: {err}");
-                }
+        let error_callback = move |err: rodio::cpal::Error| {
+            if is_stream_lost(&err.kind()) {
+                stream_failed_callback.store(true, Ordering::Release);
+                eprintln!("audio stream requires reopen: {err}");
+            }
+        };
+
+        let mut sink = LOW_LATENCY_BUFFER_CANDIDATES
+            .into_iter()
+            .find_map(|frames| {
+                DeviceSinkBuilder::from_default_device()
+                    .ok()?
+                    .with_buffer_size(BufferSize::Fixed(frames))
+                    .with_error_callback(error_callback.clone())
+                    .open_stream()
+                    .inspect_err(|error| {
+                        eprintln!("audio buffer {frames} frames unavailable: {error}")
+                    })
+                    .ok()
             })
-            .open_sink_or_fallback()
-            .ok()?;
+            .or_else(|| {
+                eprintln!("using the audio device default buffer size");
+                DeviceSinkBuilder::from_default_device()
+                    .ok()?
+                    .with_buffer_size(BufferSize::Default)
+                    .with_error_callback(error_callback)
+                    .open_sink_or_fallback()
+                    .ok()
+            })?;
+        eprintln!("audio output opened with {:?}", sink.config().buffer_size());
         sink.log_on_drop(false);
 
         Some(Self {
@@ -124,8 +184,9 @@ impl AudioOutput {
     }
 }
 
+#[derive(Clone)]
 pub struct SoundPlayer {
-    sender: Sender<Key>,
+    sender: Sender<KeyEvent>,
 }
 
 impl SoundPlayer {
@@ -137,11 +198,14 @@ impl SoundPlayer {
         Self { sender }
     }
 
-    fn handle_audio_thread(receiver: Receiver<Key>, playback: PlaybackSoundpack) -> Result<()> {
+    fn handle_audio_thread(
+        receiver: Receiver<KeyEvent>,
+        playback: PlaybackSoundpack,
+    ) -> Result<()> {
         let mut output = AudioOutput::open_default();
 
-        while let Ok(key) = receiver.recv() {
-            let Some((source, volume)) = playback.source_for_key(key) else {
+        while let Ok(evt) = receiver.recv() {
+            let Some((source, volume)) = playback.source_for_event(evt) else {
                 continue;
             };
 
@@ -162,8 +226,35 @@ impl SoundPlayer {
         Ok(())
     }
 
-    pub fn try_play(&self, key: Key) {
-        let _ = self.sender.try_send(key);
+    pub fn try_play(&self, evt: KeyEvent) {
+        let _ = self.sender.try_send(evt);
+    }
+
+    // Audition the current pack: fire a short burst of random key presses through
+    // the real sink so selecting a pack reminds you how it sounds (Klack-style).
+    // Non-blocking — a worker paces the burst and exits.
+    pub fn play_sample(&self, count: usize) {
+        let sender = self.sender.clone();
+        thread::spawn(move || {
+            let mut seed = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0x9E37_79B9_7F4A_7C15)
+                | 1; // never zero — xorshift would stick at 0
+                     // Same cadence as the web preview (src/preview.ts): 70–110ms hold,
+                     // 190–330ms press-to-press. Slower than real typing on purpose —
+                     // the ear needs the strokes separated to judge timbre rather than
+                     // hear one rattle.
+            for _ in 0..count {
+                let key = SAMPLE_KEYS[(next_rand(&mut seed) as usize) % SAMPLE_KEYS.len()];
+                let _ = sender.try_send(KeyEvent::KeyPress(key));
+                let hold = 70 + next_rand(&mut seed) % 41;
+                thread::sleep(Duration::from_millis(hold));
+                let _ = sender.try_send(KeyEvent::KeyRelease(key));
+                // press-to-press = hold + this, so 190–330ms overall.
+                thread::sleep(Duration::from_millis(120 + next_rand(&mut seed) % 101));
+            }
+        });
     }
 }
 
@@ -173,7 +264,17 @@ mod tests {
 
     use rodio::Source;
 
-    use super::AudioSource;
+    use super::{next_rand, AudioSource, LOW_LATENCY_BUFFER_CANDIDATES, SAMPLE_KEYS};
+
+    #[test]
+    fn audition_picks_varied_keys() {
+        // Guards the "stuck seed → same key every press" failure mode.
+        let mut seed = 0x1234_5678_9abc_def0_u64;
+        let picks: std::collections::HashSet<usize> = (0..20)
+            .map(|_| (next_rand(&mut seed) as usize) % SAMPLE_KEYS.len())
+            .collect();
+        assert!(picks.len() > 1, "audition keys should vary");
+    }
 
     #[test]
     fn audio_source_rejects_invalid_format() {
@@ -220,5 +321,20 @@ mod tests {
     #[test]
     fn audio_event_queue_is_bounded() {
         assert_eq!(super::AUDIO_EVENT_QUEUE_CAPACITY, 256);
+    }
+
+    #[test]
+    fn audio_buffer_candidates_favor_latency_then_stability() {
+        assert_eq!(LOW_LATENCY_BUFFER_CANDIDATES, [512, 1024, 2048]);
+    }
+
+    // Pins the error classification the reopen decision depends on, so dropping
+    // a variant fails here. cpal's own rerouting needs real hardware; not tested.
+    #[test]
+    fn lost_stream_errors_force_a_reopen() {
+        use rodio::cpal::ErrorKind;
+
+        assert!(super::is_stream_lost(&ErrorKind::DeviceNotAvailable));
+        assert!(super::is_stream_lost(&ErrorKind::StreamInvalidated));
     }
 }

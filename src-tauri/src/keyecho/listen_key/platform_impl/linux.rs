@@ -1,10 +1,6 @@
-use std::{
-    ffi::CStr,
-    os::raw::{c_char, c_int, c_uchar, c_uint, c_void},
-    ptr::null,
-};
+use std::{mem::MaybeUninit, os::raw::c_uint, ptr::null};
 
-use x11::{xlib, xrecord};
+use x11::{xinput2, xlib};
 
 use super::{Key, KeyEvent, ListenError};
 
@@ -117,100 +113,99 @@ fn key_from_code(code: c_uint) -> Key {
     }
 }
 
-type EventCallback = Box<dyn FnMut(KeyEvent)>;
-
 pub fn listen<T>(callback: T) -> Result<(), ListenError>
 where
     T: FnMut(KeyEvent) + 'static,
 {
     unsafe {
-        let dpy_control = xlib::XOpenDisplay(null());
-        if dpy_control.is_null() {
+        let display = xlib::XOpenDisplay(null());
+        if display.is_null() {
             return Err(ListenError::MissingDisplay);
         }
 
-        let extension_name =
-            CStr::from_bytes_with_nul(b"RECORD\0").map_err(|_| ListenError::XRecordExtension)?;
-        if xlib::XInitExtension(dpy_control, extension_name.as_ptr()).is_null() {
-            xlib::XCloseDisplay(dpy_control);
-            return Err(ListenError::XRecordExtension);
+        let mut major = 2;
+        let mut minor = 0;
+        if xinput2::XIQueryVersion(display, &mut major, &mut minor) != xlib::Success {
+            xlib::XCloseDisplay(display);
+            return Err(ListenError::XInputExtension);
         }
 
-        let record_range = xrecord::XRecordAllocRange();
-        if record_range.is_null() {
-            xlib::XCloseDisplay(dpy_control);
-            return Err(ListenError::RecordContext);
+        let mut mask = [0u8; ((xinput2::XI_LASTEVENT + 7) / 8) as usize];
+        xinput2::XISetMask(&mut mask, xinput2::XI_RawKeyPress);
+        xinput2::XISetMask(&mut mask, xinput2::XI_RawKeyRelease);
+        let mut event_mask = xinput2::XIEventMask {
+            deviceid: xinput2::XIAllMasterDevices,
+            mask_len: mask.len() as i32,
+            mask: mask.as_mut_ptr(),
+        };
+        let root = xlib::XDefaultRootWindow(display);
+        if xinput2::XISelectEvents(display, root, &mut event_mask, 1) != xlib::Success {
+            xlib::XCloseDisplay(display);
+            return Err(ListenError::XInputExtension);
         }
-        (*record_range).device_events.first = xlib::KeyPress as c_uchar;
-        (*record_range).device_events.last = xlib::KeyRelease as c_uchar;
+        xlib::XFlush(display);
 
-        let mut clients = xrecord::XRecordAllClients;
-        let mut ranges = record_range;
-        let context =
-            xrecord::XRecordCreateContext(dpy_control, 0, &mut clients, 1, &mut ranges, 1);
-        xlib::XFree(record_range.cast::<c_void>());
-        if context == 0 {
-            xlib::XCloseDisplay(dpy_control);
-            return Err(ListenError::RecordContext);
-        }
+        let mut callback = callback;
+        loop {
+            let mut event = MaybeUninit::<xlib::XEvent>::uninit();
+            xlib::XNextEvent(display, event.as_mut_ptr());
+            let event = event.assume_init();
+            if event.get_type() != xlib::GenericEvent {
+                continue;
+            }
 
-        xlib::XSync(dpy_control, 0);
+            let mut cookie = xlib::XGenericEventCookie::from(event);
+            if xlib::XGetEventData(display, &mut cookie) != xlib::True {
+                continue;
+            }
 
-        let callback = Box::new(Box::new(callback) as EventCallback);
-        let callback_ptr = Box::into_raw(callback);
-        let enabled = xrecord::XRecordEnableContext(
-            dpy_control,
-            context,
-            Some(raw_callback),
-            callback_ptr.cast::<c_char>(),
-        );
-        drop(Box::from_raw(callback_ptr));
-        xrecord::XRecordFreeContext(dpy_control, context);
-        xlib::XCloseDisplay(dpy_control);
-
-        if enabled == 0 {
-            return Err(ListenError::RecordContextEnabling);
-        }
-    }
-
-    Ok(())
-}
-
-#[derive(Debug)]
-#[repr(C)]
-struct XRecordDatum {
-    type_: u8,
-    code: u8,
-}
-
-unsafe extern "C" fn raw_callback(
-    closure: *mut c_char,
-    raw_data: *mut xrecord::XRecordInterceptData,
-) {
-    if let Some(data) = raw_data.as_ref() {
-        if data.category == xrecord::XRecordFromServer {
-            #[allow(clippy::cast_ptr_alignment)]
-            if let Some(xdatum) = (data.data as *const XRecordDatum).as_ref() {
-                if let Some(event) = convert_event(xdatum.type_.into(), xdatum.code.into()) {
-                    if let Some(callback) = (closure as *mut EventCallback).as_mut() {
-                        callback(event);
-                    }
+            if matches!(
+                cookie.evtype,
+                xinput2::XI_RawKeyPress | xinput2::XI_RawKeyRelease
+            ) {
+                let raw_event = &*(cookie.data as *const xinput2::XIRawEvent);
+                if let Some(event) =
+                    convert_event(cookie.evtype, raw_event.detail as c_uint, raw_event.flags)
+                {
+                    callback(event);
                 }
             }
+            xlib::XFreeEventData(display, &mut cookie);
         }
-
-        xrecord::XRecordFreeData(raw_data);
     }
 }
 
-fn convert_event(type_: c_int, code: c_uchar) -> Option<KeyEvent> {
-    let key = key_from_code(code.into());
+fn convert_event(type_: i32, code: c_uint, flags: i32) -> Option<KeyEvent> {
+    let key = key_from_code(code);
 
     let event = match type_ {
-        xlib::KeyPress => KeyEvent::KeyPress(key),
-        xlib::KeyRelease => KeyEvent::KeyRelease(key),
+        xinput2::XI_RawKeyPress if flags & xinput2::XIKeyRepeat == 0 => KeyEvent::KeyPress(key),
+        xinput2::XI_RawKeyPress => return None,
+        xinput2::XI_RawKeyRelease => KeyEvent::KeyRelease(key),
         _ => return None,
     };
 
     Some(event)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{convert_event, Key, KeyEvent};
+    use x11::xinput2;
+
+    #[test]
+    fn repeated_raw_key_presses_are_suppressed() {
+        assert_eq!(
+            convert_event(xinput2::XI_RawKeyPress, 38, 0),
+            Some(KeyEvent::KeyPress(Key::KeyA))
+        );
+        assert_eq!(
+            convert_event(xinput2::XI_RawKeyPress, 38, xinput2::XIKeyRepeat),
+            None
+        );
+        assert_eq!(
+            convert_event(xinput2::XI_RawKeyRelease, 38, 0),
+            Some(KeyEvent::KeyRelease(Key::KeyA))
+        );
+    }
 }

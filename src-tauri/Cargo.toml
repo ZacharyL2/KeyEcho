@@ -1,7 +1,7 @@
 [package]
 name = "keyecho"
 edition = "2021"
-version = "1.0.0"
+version = "1.1.0"
 authors = ["Zachary"]
 description = "KeyEcho"
 
@@ -25,15 +25,25 @@ reqwest = { version = "0.13.4", default-features = false, features = [
   "native-tls",
 ] }
 
-rodio = { git = "https://github.com/RustAudio/rodio.git", default-features = false, features = ["playback"] }
+# Pinned to a rodio git rev on cpal 0.18, which reroutes playback to the new
+# default output when devices change (requested in #41, #20). The crates.io
+# rodio pulls cpal 0.17, which drops this — a silent downgrade visible only in
+# Cargo.lock and covered by no test, so don't swap it. Recovery: is_stream_lost
+# in src/keyecho/echo.rs.
+rodio = { git = "https://github.com/RustAudio/rodio.git", rev = "ee3c21f2f3d926110706a2780658d098831c1ed9", default-features = false, features = ["playback"] }
+rubato = "4.0.0"
 symphonia = { version = "0.6.0", default-features = false, features = [
+  "flac",
   "ogg",
+  "pcm",
   "vorbis",
+  "wav",
 ] }
 arc-swap = "1.9.1"
 crossbeam-channel = "0.5.15"
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-opener = "2.5.4"
+tauri-plugin-deep-link = "2.4.9"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winapi = { version = "0.3.9", features = [
@@ -44,11 +54,15 @@ winapi = { version = "0.3.9", features = [
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = { version = "0.25.0", features = ["highsierra"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSProcessInfo", "NSString", "NSURL"] }
+objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
+plist = "1.9.0"
+tempfile = "3.27.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 openssl = { version = "0.10.81", features = ["vendored"] }
-x11 = { version = "2.21.0", features = ["xlib", "xrecord", "xinput"] }
+x11 = { version = "2.21.0", features = ["xlib", "xinput"] }
 
 [profile.release]
 panic = "abort"
@@ -59,3 +73,9 @@ strip = true
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+# Mac App Store build: App Sandbox, no self-updater (the Store handles updates).
+# See docs/mac-app-store.md.
+app-store = []
+
+[dev-dependencies]
+tempfile = "3.27.0"
