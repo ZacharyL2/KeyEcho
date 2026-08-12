@@ -15,9 +15,9 @@ describe('updater asset mapping', () => {
       pub_date: '2026-07-09T00:00:00Z',
       version: 'v1.0.0',
     });
-    expect(
-      createUpdateManifest('v1.0.0', 'Release notes'),
-    ).not.toHaveProperty('name');
+    expect(createUpdateManifest('v1.0.0', 'Release notes')).not.toHaveProperty(
+      'name',
+    );
   });
 
   it('maps Windows updater artifacts', () => {
