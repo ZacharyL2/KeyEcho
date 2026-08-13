@@ -510,7 +510,7 @@ mod tests {
             "https://keyecho.app/?source=keyecho_app#queue",
             "https://keyecho.app/?source=keyecho_app&intent=founding_bundle&version=1.0.0",
             "https://www.keyecho.app/?source=keyecho_app&intent=sound_pack_vote",
-            "https://github.com/ZacharyL2/KeyEcho/blob/main/docs/custom-sounds.md",
+            "https://github.com/ZacharyL2/KeyEcho/blob/main/docs/guides/custom-sounds.md",
         ] {
             let url = Url::parse(raw_url).expect("valid url");
             validate_external_url(&url).expect("allowed external URL");
