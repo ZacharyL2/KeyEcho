@@ -12,7 +12,7 @@ KeyEcho is a tiny open-source desktop app that plays pleasant keyboard sounds
 while you type. It is built with Tauri, Rust, and Solid, and is designed to stay
 local, fast, and easy to audit.
 
-[Website](https://keyecho.app) · [Download](https://github.com/ZacharyL2/KeyEcho/releases/latest) · [Technical write-up](https://upweb.dev/posts/open-sourced-keyecho) · [Custom sounds](docs/custom-sounds.md)
+[Website](https://keyecho.app) · [Download](https://github.com/ZacharyL2/KeyEcho/releases/latest) · [Technical write-up](https://upweb.dev/posts/open-sourced-keyecho) · [Custom sounds](docs/guides/custom-sounds.md)
 
 ## Why
 
@@ -39,13 +39,13 @@ The current founding bundle is a one-time $9.99 early-supporter offer:
 You can vote for the next packs or back the founding bundle on
 [keyecho.app](https://keyecho.app).
 
-Want to create your own? See the [custom sounds guide](docs/custom-sounds.md)
+Want to create your own? See the [custom sounds guide](docs/guides/custom-sounds.md)
 for recording, processing, and adding your own sound packs to KeyEcho.
 
 ## Documentation
 
-- [Custom sounds guide](docs/custom-sounds.md)
-- [Performance notes](docs/performance.md)
+- [Custom sounds guide](docs/guides/custom-sounds.md)
+- [Performance notes](docs/reference/performance.md)
 - [Changelog](CHANGELOG.md)
 
 ## Install
