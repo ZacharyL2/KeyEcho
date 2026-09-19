@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createUpdateManifest,
   getPublishPlatforms,
+  promptNotes,
   resolvePlatforms,
 } from './updater';
 
@@ -90,5 +91,28 @@ describe('updater asset mapping', () => {
         linux: { signature: '', url: 'https://example.com/linux' },
       }),
     ).toThrow('Missing updater signatures for: linux');
+  });
+});
+
+describe('updater manifest notes', () => {
+  it('keeps a few plain highlights and links the full notes', () => {
+    const notes = [
+      'Intro line',
+      '',
+      '### Features',
+      '',
+      '- One ([#1](https://example.com/1))',
+      '- Two',
+      '- Three',
+      '- Four',
+    ].join('\n');
+    expect(promptNotes(notes)).toBe(
+      '- One (#1)\n- Two\n- Three\n\nSee all changes at https://keyecho.app/updates',
+    );
+  });
+
+  it('shortens long highlights', () => {
+    const line = promptNotes(`- ${'a'.repeat(200)}`).split('\n')[0];
+    expect(line).toBe(`- ${'a'.repeat(89)}…`);
   });
 });

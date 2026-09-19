@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.1.1
+
+### Features
+
+- Add a status bar that shows what is armed, the last key played, and its level, so silence from a muted volume never reads as a broken app
+- Add a keyboard sound test for comparing recorded packs in the browser
+- Offer All Sounds Forever in the sound library: $9.99 once for every current and future official Crafted Pack. Every Crafted Pack in the list unlocks through this offer; single packs are still sold on their pages at keyecho.app
+- Rebuild Browse packs: Crafted packs lead the list, most popular first, and the banner states what All Sounds Forever includes and how it is delivered
+- Filter Browse packs by sound type and price
+- Show a loading state while a pack preview is fetched, and keep the Browse packs dialog one height while filtering
+- Allow volume up to 150% for quieter packs ([#48](https://github.com/ZacharyL2/KeyEcho/issues/48))
+- Add a Sounds folder link at the bottom of the window that opens where sound packs are stored ([#36](https://github.com/ZacharyL2/KeyEcho/issues/36))
+- Clarify the license dialog: Activate a key, get a key sent to your email, and read plain errors when a key or the server does not answer
+- Quieten notifications: picking a pack, changing volume, toggling auto launch and finishing a download now show in place instead of raising a notification
+
+### Fixes
+
+- Keep the update prompt's buttons on screen: it now lists a few highlights and links to the full notes ([#46](https://github.com/ZacharyL2/KeyEcho/issues/46))
+- Make pack previews more reliable: retry dropped connections and tolerate tiny timing rounding in sound files
+- Keep the pack menu inside the window, and stop it scrolling the list behind it
+- Use thin scrollbars that match the app
+
+### Changed
+
+- Remove the KeyEcho v1 pack import; this version no longer detects or imports packs from the old app
+
+### Security
+
+- Send license keys in the Authorization header for entitlement checks and paid-pack downloads instead of placing them in URLs
+- Keep compatibility with existing v1.1.0 purchases while the website accepts the previous query format during migration
+
 ## v1.1.0
 
 Browse and preview the full catalog at [keyecho.app/packs](https://keyecho.app/packs).

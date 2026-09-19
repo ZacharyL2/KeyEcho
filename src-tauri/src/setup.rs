@@ -47,7 +47,7 @@ pub fn resolve_setup(app: &mut App) -> Result<()> {
 
     // run_keyecho spawns its own listener thread and hands back a player the
     // preview command uses to audition the selected pack.
-    app.manage(run_keyecho(playback));
+    app.manage(run_keyecho(playback, app_handle.clone()));
 
     Ok(())
 }

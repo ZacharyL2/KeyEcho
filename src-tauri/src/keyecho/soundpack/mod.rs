@@ -18,7 +18,7 @@ mod sound;
 use decoder::SoundDecoder;
 
 use super::{listen_key::KeyEvent, AudioSource};
-use sound::KeySound;
+pub(crate) use sound::KeySound;
 
 const LEGACY_APP_DATA_IDENTIFIER: &str = "xyz.waveapps.keyecho";
 
@@ -122,88 +122,25 @@ fn migrate_legacy_app_data(handle: &AppHandle, app_data_dir: &Path) -> Result<()
     config.save(&config_path)
 }
 
-// On-demand import of the user's own v1 packs. The auto-migration above only
-// fires on the very first v1.1 launch; a returning user who already has a new
-// config never gets it, so this pulls the old packs in when they ask. The v1
-// path is fixed (old bundle id); the audio is the user's local data — nothing is
-// fetched or hosted. KeySound loads the v1 (ogg) config, so old packs just work.
-pub fn import_legacy_packs(handle: &AppHandle) -> Result<Vec<SoundOption>> {
-    let sounds_dir = handle.path().app_data_dir()?.join("sounds");
-    import_packs_from_dir(&legacy_sounds_dir(handle)?, &sounds_dir)
-}
-
-fn legacy_sounds_dir(handle: &AppHandle) -> Result<PathBuf> {
-    Ok(handle
-        .path()
-        .data_dir()?
-        .join(LEGACY_APP_DATA_IDENTIFIER)
-        .join("sounds"))
-}
-
-/// How many v1 packs are sitting on this machine waiting to be imported. Lets
-/// the UI speak up only when there is actually something to recover — the
-/// upgrade case where someone lands on v1.1 and their sounds are "gone".
-pub fn legacy_pack_count(handle: &AppHandle) -> usize {
-    let Ok(dir) = legacy_sounds_dir(handle) else {
-        return 0;
-    };
-    let Ok(entries) = fs::read_dir(dir) else {
-        return 0;
-    };
-    entries
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_ok_and(|t| t.is_dir()))
-        .filter(|entry| entry.path().join("config.json").is_file())
-        .count()
-}
-
-/// True when a pack ships release (key-up) samples. v1 packs are press-only, so
-/// this is what separates an imported legacy pack from a v1.1 dual-sound one.
-pub fn pack_has_release(dir: &str) -> bool {
-    let Ok(raw) = fs::read(Path::new(dir).join("config.json")) else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&raw) else {
-        return false;
-    };
-    value
-        .get("releases")
-        .and_then(serde_json::Value::as_object)
-        .is_some_and(|releases| !releases.is_empty())
-}
-
-fn import_packs_from_dir(legacy_sounds: &Path, sounds_dir: &Path) -> Result<Vec<SoundOption>> {
-    if !legacy_sounds.exists() {
-        return Ok(Vec::new());
-    }
-    let mut imported = Vec::new();
-    for entry in fs::read_dir(legacy_sounds)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let source = entry.path();
-        if !source.join("config.json").is_file() {
-            continue; // not a soundpack folder
-        }
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let dest = sounds_dir.join(&name);
-        copy_missing_dir(&source, &dest)?;
-        imported.push(SoundOption {
-            name,
-            value: dest.display().to_string(),
-        });
-    }
-    Ok(imported)
-}
-
 fn default_volume() -> f32 {
     1.0
 }
 
+fn meter_step(volume: f32) -> u8 {
+    match volume {
+        v if v.is_nan() || v <= 0.0 => 0,
+        v if v < 0.34 => 1,
+        v if v < 0.67 => 2,
+        _ => 3,
+    }
+}
+
+// Up to 150%: quiet packs gain headroom; beyond that the loudest pack clips.
+const MAX_VOLUME: f32 = 1.5;
+
 fn normalize_volume(volume: f32) -> Result<f32> {
     ensure!(volume.is_finite(), "volume must be finite");
-    Ok(volume.clamp(0.0, 1.0))
+    Ok(volume.clamp(0.0, MAX_VOLUME))
 }
 
 #[derive(Clone)]
@@ -226,6 +163,19 @@ impl PlaybackSoundpack {
 
     fn set_volume(&self, volume: f32) {
         self.volume_bits.store(volume.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Status-bar meter step, 0-3. Zero means nothing will be heard: no pack
+    /// loaded, or the volume is down.
+    pub(super) fn meter_level(&self) -> u8 {
+        if self.current_sound.load().is_none() {
+            return 0;
+        }
+        meter_step(f32::from_bits(self.volume_bits.load(Ordering::Relaxed)))
+    }
+
+    pub(super) fn volume(&self) -> f32 {
+        f32::from_bits(self.volume_bits.load(Ordering::Relaxed))
     }
 
     pub(super) fn source_for_event(&self, evt: KeyEvent) -> Option<(AudioSource, f32)> {
@@ -323,39 +273,23 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{
-        copy_missing_dir, import_packs_from_dir, normalize_volume, SoundOption, SoundpackConfig,
-    };
+    use super::{copy_missing_dir, meter_step, normalize_volume, SoundOption, SoundpackConfig};
 
     #[test]
-    fn import_legacy_copies_pack_folders_and_skips_non_packs() {
-        let temp = tempdir().expect("temporary directory");
-        let legacy = temp.path().join("legacy/sounds");
-        let current = temp.path().join("current/sounds");
-        fs::create_dir_all(legacy.join("cherry-red")).expect("legacy pack");
-        fs::write(legacy.join("cherry-red/config.json"), "{}").expect("config");
-        fs::write(legacy.join("cherry-red/sound.ogg"), "a").expect("audio");
-        fs::create_dir_all(legacy.join("stray")).expect("stray dir"); // no config.json
-
-        let imported = import_packs_from_dir(&legacy, &current).expect("import");
-        assert_eq!(imported.len(), 1);
-        assert_eq!(imported[0].name, "cherry-red");
-        assert!(current.join("cherry-red/sound.ogg").is_file());
-    }
-
-    #[test]
-    fn import_legacy_is_empty_without_v1_install() {
-        let temp = tempdir().expect("temporary directory");
-        let imported = import_packs_from_dir(&temp.path().join("nope"), &temp.path().join("cur"))
-            .expect("import");
-        assert!(imported.is_empty());
+    fn meter_step_reports_silence_as_zero_and_full_volume_as_three() {
+        assert_eq!(meter_step(0.0), 0);
+        assert_eq!(meter_step(f32::NAN), 0);
+        assert_eq!(meter_step(0.2), 1);
+        assert_eq!(meter_step(0.5), 2);
+        assert_eq!(meter_step(1.0), 3);
     }
 
     #[test]
     fn normalize_volume_clamps_to_supported_range() {
         assert_eq!(normalize_volume(-0.5).expect("valid volume"), 0.0);
         assert_eq!(normalize_volume(0.4).expect("valid volume"), 0.4);
-        assert_eq!(normalize_volume(1.5).expect("valid volume"), 1.0);
+        assert_eq!(normalize_volume(1.5).expect("valid volume"), 1.5);
+        assert_eq!(normalize_volume(2.0).expect("valid volume"), 1.5);
     }
 
     #[test]

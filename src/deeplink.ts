@@ -1,9 +1,8 @@
 import { getCurrent, onOpenUrl } from '@tauri-apps/plugin-deep-link';
 import { createSignal } from 'solid-js';
 
+import type { Notify } from './notify';
 import { KEYECHO_ORIGIN } from './origin';
-
-type Notify = (message: string, tone?: 'default' | 'error') => void;
 
 const KEY_ENDPOINT = `${KEYECHO_ORIGIN}/packs/key`;
 const PENDING_RETRIES = 5;
@@ -79,24 +78,23 @@ async function activateFromSession(session: string, notify: Notify) {
     try {
       result = await fetchActivation(session);
     } catch (error) {
-      notify(
-        `Activation failed — paste your license key manually. Reason: ${error}`,
-        'error',
-      );
+      notify("Couldn't activate. Paste your key in License.", {
+        tone: 'error',
+        details: String(error),
+      });
       return;
     }
     if (result !== 'pending') {
+      // The activation effect in App reports what arrived; staying quiet here
+      // keeps one purchase from stacking two toasts.
       setActivationKey(result.key);
-      const count = result.packs.length;
-      notify(`Activated — ${count} pack${count === 1 ? '' : 's'} available.`);
       return;
     }
     await sleep(PENDING_DELAY_MS); // webhook race: the key isn't minted yet
   }
-  notify(
-    'Your purchase is still processing. Paste your license key manually in a moment.',
-    'error',
-  );
+  notify('Purchase still processing. Paste your key in License in a moment.', {
+    tone: 'error',
+  });
 }
 
 const handled = new Set<string>();

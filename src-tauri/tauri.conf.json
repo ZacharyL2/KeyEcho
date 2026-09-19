@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "KeyEcho",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "identifier": "app.keyecho.keyecho",
   "mainBinaryName": "KeyEcho",
   "build": {

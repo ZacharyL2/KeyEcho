@@ -9,9 +9,9 @@ mod keyecho;
 mod setup;
 
 use commands::{
-    download_sound, exit_app, get_selected_sound, get_sounds, get_volume, import_sound_pack,
-    legacy_packs_available, open_external_url, press_only_packs, preview_pack_sound, select_sound,
-    update_volume,
+    download_sound, exit_app, get_selected_sound, get_sounds, get_volume, open_external_url,
+    open_sounds_folder, preview_catalog_pack, preview_pack_sound, select_sound, update_volume,
+    PreviewCache,
 };
 use features::autostart::{is_auto_launch_enabled, set_auto_launch};
 
@@ -45,18 +45,18 @@ fn main() {
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
     let app = builder
+        .manage(PreviewCache::default())
         .invoke_handler(tauri::generate_handler![
             download_sound,
-            import_sound_pack,
             preview_pack_sound,
-            press_only_packs,
-            legacy_packs_available,
+            preview_catalog_pack,
             get_sounds,
             get_selected_sound,
             select_sound,
             get_volume,
             update_volume,
             open_external_url,
+            open_sounds_folder,
             exit_app,
             is_auto_launch_enabled,
             set_auto_launch,

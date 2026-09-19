@@ -1,4 +1,4 @@
-use std::{fs::File, path::Path};
+use std::{fs::File, io::Cursor, path::Path};
 
 use anyhow::{Context, Result};
 use symphonia::{
@@ -6,7 +6,7 @@ use symphonia::{
         audio::GenericAudioBufferRef,
         codecs::audio::AudioDecoder,
         formats::{probe::Hint, FormatReader, TrackType},
-        io::MediaSourceStream,
+        io::{MediaSource, MediaSourceStream},
     },
     default::{get_codecs, get_probe},
 };
@@ -31,10 +31,19 @@ impl SoundDecoder {
         P: AsRef<Path>,
     {
         let file = File::open(&path)?;
-        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+        let ext = path.as_ref().extension().and_then(|p| p.to_str());
+        Self::from_media(Box::new(file), ext)
+    }
+
+    pub fn from_bytes(bytes: Vec<u8>, ext: &str) -> Result<Self> {
+        Self::from_media(Box::new(Cursor::new(bytes)), Some(ext))
+    }
+
+    fn from_media(media: Box<dyn MediaSource>, ext: Option<&str>) -> Result<Self> {
+        let mss = MediaSourceStream::new(media, Default::default());
 
         let mut hint = Hint::new();
-        if let Some(ext) = path.as_ref().extension().and_then(|p| p.to_str()) {
+        if let Some(ext) = ext {
             hint.with_extension(ext);
         }
 

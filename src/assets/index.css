@@ -26,6 +26,9 @@
   --destructive: 1 77% 41%;
   --destructive-foreground: 0 0% 98%;
 
+  /* The only hue besides the red: "this one is already yours". */
+  --green: 152 40% 33%;
+
   --ring: 0 0% 10.6%;
 
   --radius: 0rem;
@@ -152,7 +155,11 @@ select:disabled {
 }
 
 .toast-card {
+  display: grid;
   width: 100%;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
   border: 1px solid hsl(var(--foreground) / 0.35);
   background: hsl(var(--card));
   box-shadow:
@@ -163,22 +170,34 @@ select:disabled {
   line-height: 1.35;
   padding: 0.75rem 0.875rem;
   text-align: left;
-  transition:
-    border-color 160ms ease,
-    box-shadow 160ms ease,
-    transform 160ms ease;
 }
 
-.toast-card:hover {
-  border-color: hsl(var(--foreground) / 0.7);
-  transform: translateY(-1px);
+.toast-message {
+  margin: 0;
 }
 
-.toast-card:focus-visible {
-  outline: none;
-  box-shadow:
-    0 0 0 2px hsl(var(--ring) / 0.3),
-    0 2px 8px rgb(27 27 27 / 0.1);
+.toast-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.toast-details,
+.field-details {
+  grid-column: 1 / -1;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+}
+
+.toast-details p,
+.field-details p {
+  margin: 0.25rem 0 0;
+  word-break: break-word;
+}
+
+.toast-details summary,
+.field-details summary {
+  cursor: pointer;
 }
 
 .toast-card.toast-error {
@@ -281,6 +300,41 @@ select:disabled {
   color: hsl(var(--foreground));
 }
 
+/* The "other path" beside a primary action is plain text, not a second keycap. */
+.text-button {
+  display: inline-flex;
+  min-height: 2.5rem;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: hsl(var(--foreground));
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0 0.5rem;
+  transition: color 120ms ease;
+}
+
+.text-button:hover {
+  color: hsl(var(--foreground) / 0.7);
+}
+
+.text-button:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+.text-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.text-button:disabled:hover {
+  color: hsl(var(--foreground));
+}
+
 .primary-button {
   display: inline-flex;
   height: 2.5rem;
@@ -358,30 +412,40 @@ select:disabled {
   box-shadow: 0 0 0 2px hsl(var(--ring) / 0.2);
 }
 
-.close-icon {
-  position: relative;
+.ui-icon {
   display: block;
-  width: 0.75rem;
-  height: 0.75rem;
+  width: 1em;
+  height: 1em;
+  flex: none;
 }
 
-.close-icon::before,
-.close-icon::after {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 0.75rem;
-  height: 0.09375rem;
-  background: currentColor;
-  content: '';
+/* One thin, square scrollbar everywhere, in the ink of the control borders. */
+@supports selector(::-webkit-scrollbar) {
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    background: hsl(var(--foreground) / 0.22) padding-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--foreground) / 0.45);
+  }
 }
 
-.close-icon::before {
-  transform: translate(-50%, -50%) rotate(45deg);
-}
-
-.close-icon::after {
-  transform: translate(-50%, -50%) rotate(-45deg);
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-color: hsl(var(--foreground) / 0.25) transparent;
+    scrollbar-width: thin;
+  }
 }
 
 .dialog-backdrop {
@@ -397,7 +461,7 @@ select:disabled {
 .dialog-panel {
   display: flex;
   width: min(36rem, 100%);
-  max-height: min(34rem, calc(100vh - 2rem));
+  max-height: min(34rem, calc(100dvh - 2rem));
   flex-direction: column;
   overflow: hidden;
   border: 1.5px solid hsl(var(--foreground) / 0.75);
@@ -406,6 +470,17 @@ select:disabled {
   box-shadow:
     0 2px 0 hsl(var(--foreground) / 0.3),
     0 24px 56px rgb(27 27 27 / 0.28);
+}
+
+/* Browse packs keeps one height, so filtering doesn't make the dialog jump. */
+.dialog-panel.is-fixed {
+  height: min(34rem, calc(100dvh - 2rem));
+}
+
+.dialog-panel.is-fixed .dialog-body {
+  flex: 1;
+  /* Always keep the 8px track so rows never shift when the thumb comes or goes. */
+  overflow-y: scroll;
 }
 
 .dialog-header,
@@ -431,6 +506,7 @@ select:disabled {
 .dialog-body {
   min-height: 10rem;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0.375rem;
 }
 
@@ -438,6 +514,60 @@ select:disabled {
   justify-content: flex-end;
   border-top: 1px solid hsl(var(--border));
   background: hsl(var(--muted) / 0.6);
+}
+
+.sound-library-offer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  position: sticky;
+  /* Sticky insets from the body's padding edge; pull back to the true top. */
+  top: -0.375rem;
+  z-index: 1;
+  /* Full-bleed strip under the header: cancel the dialog body's padding. */
+  margin: -0.375rem -0.375rem 0.25rem;
+  border-bottom: 1px solid hsl(var(--border));
+  /* Opaque, so rows don't show through while scrolling underneath. */
+  background:
+    linear-gradient(hsl(var(--muted) / 0.55), hsl(var(--muted) / 0.55)),
+    hsl(var(--card));
+  padding: 0.875rem 1.25rem;
+  transition: box-shadow 150ms ease;
+}
+
+.dialog-body.is-scrolled .sound-library-offer {
+  box-shadow: 0 6px 12px -6px rgb(27 27 27 / 0.18);
+}
+
+.group-label {
+  margin: 0.75rem 0 0.25rem;
+  padding: 0 0.875rem;
+  color: hsl(var(--muted-foreground));
+  font-family:
+    ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.6875rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.sound-library-offer-title {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.sound-library-offer-copy {
+  margin: 0.25rem 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.sound-library-offer-button {
+  min-width: 10rem;
 }
 
 .sound-download-row {
@@ -483,6 +613,69 @@ select:disabled {
   padding-inline: 0.625rem;
 }
 
+/* Fetching a preview: the pressed square says it heard the click. */
+.sound-preview-action.is-loading {
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sound-preview-action.is-loading {
+    animation: field-preparing 1.1s ease-in-out infinite;
+  }
+
+  .sound-preview-action.is-loading .ui-icon {
+    animation: preview-spin 0.8s linear infinite;
+  }
+}
+
+@keyframes preview-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Sound and price filters, side by side in one row like the site's two groups. */
+.pack-filters {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  padding: 0.75rem 0.875rem 0.25rem;
+}
+
+.pack-filter {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pack-filter-label {
+  flex: none;
+  color: hsl(var(--muted-foreground));
+  font-family:
+    ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.6875rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* Row actions stay flat so the offer's button is the only keycap in the list. */
+.sound-download-row .secondary-button {
+  height: 2.25rem;
+  border-color: hsl(var(--border));
+  box-shadow: none;
+}
+
+.sound-download-row .secondary-button:active {
+  box-shadow: none;
+  transform: none;
+}
+
+.sound-download-row .secondary-button:focus-visible {
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.3);
+}
+
 .sound-download-price {
   color: hsl(var(--muted-foreground));
   font-variant-numeric: tabular-nums;
@@ -492,6 +685,7 @@ select:disabled {
   display: grid;
   min-height: 8rem;
   place-items: center;
+  gap: 0.25rem;
   padding: 1rem;
   color: hsl(var(--muted-foreground));
   font-size: 0.875rem;
@@ -502,52 +696,23 @@ select:disabled {
   color: hsl(var(--destructive));
 }
 
-.project-update {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+/* One line, not a card: the update is information, not the screen's main act. */
+.update-strip {
+  display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: 0.75rem;
   border-top: 1px solid hsl(var(--border));
   background: hsl(var(--muted) / 0.7);
-  box-shadow: inset 0 2px 4px rgb(27 27 27 / 0.04);
-  padding: 1rem 1.25rem;
+  padding: 0.375rem 1.25rem;
 }
 
-.project-update-kicker {
-  margin: 0 0 0.375rem;
-  color: hsl(var(--destructive));
-  font-family:
-    ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 0.6875rem;
-  letter-spacing: 0.12em;
-  line-height: 1;
-  text-transform: uppercase;
-}
-
-.project-update-title {
-  margin: 0;
+.update-strip-title {
+  min-width: 0;
+  overflow: hidden;
   color: hsl(var(--foreground));
-  font-size: 0.9375rem;
-  font-weight: 650;
-  line-height: 1.25;
-}
-
-.project-update-copy {
-  max-width: 27rem;
-  margin: 0.375rem 0 0;
-  color: hsl(var(--muted-foreground));
   font-size: 0.8125rem;
-  line-height: 1.45;
-}
-
-.project-update-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.project-update-button {
-  min-width: 8.5rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .whats-new-button {
@@ -615,30 +780,12 @@ select:disabled {
   }
 }
 
-.license-toggle {
-  color: hsl(var(--muted-foreground));
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 0.25rem 0;
-}
-.license-toggle:hover {
-  color: hsl(var(--foreground));
-}
-
 /* Empty selector: inherits .ui-field's border/height so the empty and loaded
    states share one footprint — it still reads as the thing you pick from. */
 .pack-empty-field {
   display: flex;
   align-items: center;
   color: hsl(var(--muted-foreground));
-}
-
-.pack-recover-note {
-  margin: 0;
-  color: hsl(var(--muted-foreground));
-  font-size: 0.8125rem;
-  line-height: 1.4;
 }
 
 /* Decoding a pack takes a moment; mark the control being acted on, not just the
@@ -666,15 +813,297 @@ select:disabled {
   }
 }
 
-/* Owned paid pack: a state, not a button — the re-download path is the
-   License dialog, which has the key. */
-/* Occupies the same box as the action button it replaces — inline-flex because
-   min-width is ignored on a plain inline span, which left this column narrower
-   than the button rows and broke the right edge. */
-.sound-download-owned {
+/* Installed status sits in the price slot, so actions line up row to row. */
+.installed-mark {
   display: inline-flex;
-  height: 2.5rem;
-  min-width: 7rem;
   align-items: center;
-  justify-content: center;
+  gap: 0.25rem;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.installed-mark .ui-icon {
+  color: hsl(var(--green));
+}
+
+/* The status bar is the first thing the window says: what is armed, and what
+   the last key did. Fade only — no movement on a line that updates per key. */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--muted) / 0.5);
+  padding: 0.625rem 1.25rem;
+}
+
+.status-dot {
+  width: 0.625rem;
+  height: 0.625rem;
+  flex: none;
+  border-radius: 50%;
+  background: hsl(var(--foreground));
+  box-sizing: border-box;
+  transition: background-color 120ms ease;
+}
+
+.status-dot.is-off {
+  border: 1.5px solid hsl(var(--foreground));
+  background: hsl(var(--card));
+}
+
+.status-dot.is-muted {
+  background: hsl(var(--border));
+}
+
+.status-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-detail {
+  display: inline-flex;
+  align-items: center;
+  color: hsl(var(--muted-foreground));
+  font-family:
+    ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.6875rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.level-meter {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 0.125rem;
+  margin-left: 0.5rem;
+}
+
+.level-meter i {
+  display: block;
+  width: 0.25rem;
+  background: hsl(var(--border));
+  transition:
+    background-color 120ms ease,
+    opacity 120ms ease;
+}
+
+.level-meter i:nth-child(1) {
+  height: 0.3125rem;
+}
+
+.level-meter i:nth-child(2) {
+  height: 0.5625rem;
+}
+
+.level-meter i:nth-child(3) {
+  height: 0.8125rem;
+}
+
+.level-meter i.is-lit {
+  background: hsl(var(--foreground));
+}
+
+.pack-label {
+  margin: 0 0 0.5rem;
+}
+
+.pack-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.pack-select {
+  position: relative;
+  min-width: 0;
+  flex: 1;
+}
+
+.pack-select-trigger {
+  display: flex;
+  align-items: center;
+  border-color: hsl(var(--foreground) / 0.7);
+  box-shadow:
+    0 2px 0 hsl(var(--foreground) / 0.55),
+    0 3px 6px rgb(27 27 27 / 0.12);
+  cursor: pointer;
+  text-align: left;
+}
+
+/* Same keycap edge as the buttons; keep it under the focus ring too. */
+.pack-select-trigger:focus-visible {
+  box-shadow:
+    0 0 0 2px hsl(var(--ring) / 0.3),
+    0 2px 0 hsl(var(--foreground) / 0.55);
+}
+
+.pack-select-trigger > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pack-select-trigger.is-open {
+  border-color: hsl(var(--foreground));
+}
+
+.pack-select-placeholder {
+  color: hsl(var(--muted-foreground));
+}
+
+.pack-select-menu {
+  position: fixed;
+  z-index: 60;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  border: 1px solid hsl(var(--foreground) / 0.7);
+  background: hsl(var(--card));
+  box-shadow:
+    0 2px 0 hsl(var(--foreground) / 0.55),
+    0 12px 24px rgb(27 27 27 / 0.14);
+}
+
+.pack-select-menu > li {
+  display: flex;
+  height: 2.25rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0 0.75rem;
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.pack-select-menu > li > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pack-select-menu > li.is-active {
+  background: hsl(var(--accent));
+}
+
+.pack-select-menu > li[aria-selected='true'] {
+  font-weight: 500;
+}
+
+.field-hint.pack-hint {
+  margin-top: 0.5rem;
+}
+
+.volume-control {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.volume-value {
+  width: 2rem;
+  color: hsl(var(--muted-foreground));
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  font-size: 0.875rem;
+}
+
+/* A link, not a second keycap: the quieter path beside a real button. */
+.link-button {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+
+.link-button:hover {
+  color: hsl(var(--foreground) / 0.7);
+}
+
+.link-button:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+/* A paid action that is waiting on something else: still readable, clearly
+   not the thing to press. */
+.secondary-button.is-ghost,
+.primary-button.is-ghost {
+  border-color: hsl(var(--foreground) / 0.55);
+  background: hsl(var(--card));
+  box-shadow: none;
+  color: hsl(var(--muted-foreground));
+  opacity: 1;
+}
+
+.waiting-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.waiting-action .sound-download-action {
+  min-width: 11rem;
+}
+
+.row-note {
+  display: block;
+  color: hsl(var(--destructive));
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.field-hint {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.field-error {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: flex-start;
+}
+
+.field-error-title {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.ui-field.is-invalid {
+  border-color: hsl(var(--foreground));
+}
+
+.restore-block {
+  margin-top: 1.125rem;
+  border-top: 1px solid hsl(var(--border));
+  padding-top: 0.875rem;
+}
+
+.restore-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
 }

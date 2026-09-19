@@ -31,6 +31,11 @@ struct SoundFileConfig {
 }
 
 #[derive(Debug, Deserialize)]
+struct PreviewConfig {
+    defines: HashMap<String, Vec<u64>>,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SoundFileConfigV2 {
     schema_version: u32,
@@ -144,6 +149,38 @@ impl KeySound {
             let config: SoundFileConfig = serde_json::from_value(value)?;
             Self::from_v1(sound_dir.to_string(), &dir, config)
         }
+    }
+
+    /// A catalog preview: one FLAC clip plus `defines` of
+    /// `[pressStart, pressDur]` or `[pressStart, pressDur, releaseStart, releaseDur]` in ms.
+    pub fn from_preview(name: String, config: &[u8], audio: Vec<u8>) -> Result<Self> {
+        let config: PreviewConfig = serde_json::from_slice(config)?;
+        let mut defines = KeySoundDefines::new();
+        let mut releases = KeySoundDefines::new();
+        for (key, slices) in config.defines {
+            let Ok(key) = serde_json::from_value::<Key>(serde_json::Value::String(key)) else {
+                continue;
+            };
+            match slices.as_slice() {
+                [p_start, p_dur, r_start, r_dur, ..] => {
+                    defines.insert(key, [*p_start, *p_dur]);
+                    if *r_dur > 0 {
+                        releases.insert(key, [*r_start, *r_dur]);
+                    }
+                }
+                [p_start, p_dur, ..] => {
+                    defines.insert(key, [*p_start, *p_dur]);
+                }
+                _ => {}
+            }
+        }
+        defines.retain(|_, [_, dur]| *dur > 0);
+        anyhow::ensure!(!defines.is_empty(), "preview has no keys");
+
+        let decoded = SoundDecoder::from_bytes(audio, "flac")?.decode_all()?;
+        let defines = legacy_defines_to_frames(defines, decoded.sample_rate);
+        let releases = legacy_defines_to_frames(releases, decoded.sample_rate);
+        Self::from_frame_defines(name, defines, releases, decoded)
     }
 
     fn from_v1(name: String, dir: &Path, config: SoundFileConfig) -> Result<Self> {
@@ -377,6 +414,8 @@ fn millis_to_frame(milliseconds: u64, sample_rate: u32) -> u64 {
         / 1_000
 }
 
+const SLICE_END_TOLERANCE_FRAMES: usize = 1024;
+
 fn slice_interleaved(samples: &[f32], channels: u16, slice: FrameSlice) -> Result<Vec<f32>> {
     anyhow::ensure!(channels > 0, "audio has no channels");
     anyhow::ensure!(slice.frame_count > 0, "audio slice is empty");
@@ -391,8 +430,14 @@ fn slice_interleaved(samples: &[f32], channels: u16, slice: FrameSlice) -> Resul
         .and_then(|frame| frame.checked_mul(channels))
         .context("audio slice end overflow")?;
     let start = usize::try_from(start).context("audio slice start is too large")?;
-    let end = usize::try_from(end).context("audio slice end is too large")?;
+    let mut end = usize::try_from(end).context("audio slice end is too large")?;
+    // Millisecond rounding can push the last slice a few frames past the clip.
+    let tolerance = SLICE_END_TOLERANCE_FRAMES * channels as usize;
+    if end > samples.len() && end - samples.len() <= tolerance {
+        end = samples.len();
+    }
     anyhow::ensure!(end <= samples.len(), "audio slice exceeds decoded audio");
+    anyhow::ensure!(start < end, "audio slice is empty");
     Ok(samples[start..end].to_vec())
 }
 

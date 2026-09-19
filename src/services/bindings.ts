@@ -37,31 +37,20 @@ export const commands = {
     return callCommand<null>('set_auto_launch', { enabled });
   },
 
-  downloadSound(url: string) {
-    return callCommand<null>('download_sound', { url });
-  },
-
-  // Import the user's v1 packs from the fixed legacy path; [] when none found.
-  importSoundPack() {
-    return callCommand<SoundOption[]>('import_sound_pack');
+  downloadSound(url: string, licenseKey?: string) {
+    return callCommand<null>('download_sound', { url, licenseKey });
   },
 
   openExternalUrl(url: string) {
     return callCommand<null>('open_external_url', { url });
   },
 
+  openSoundsFolder() {
+    return callCommand<null>('open_sounds_folder');
+  },
+
   getSounds() {
     return callCommand<SoundOption[]>('get_sounds');
-  },
-
-  // Installed packs with no key-up samples (imported v1 packs).
-  pressOnlyPacks() {
-    return callCommand<string[]>('press_only_packs');
-  },
-
-  // How many v1 packs are still on this machine, waiting to be imported.
-  legacyPacksAvailable() {
-    return callCommand<number>('legacy_packs_available');
   },
 
   getSelectedSound() {
@@ -75,6 +64,11 @@ export const commands = {
   // Audition the current pack: a short burst of random keys through the sink.
   previewPackSound() {
     return callCommand<null>('preview_pack_sound');
+  },
+
+  // Audition a catalog pack (installed or not) from its CDN preview clip.
+  previewCatalogPack(id: string) {
+    return callCommand<null>('preview_catalog_pack', { id });
   },
 
   getVolume() {
