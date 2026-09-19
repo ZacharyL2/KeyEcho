@@ -4,12 +4,14 @@ import {
   createMemo,
   createResource,
   createSignal,
+  createUniqueId,
   For,
   on,
   onCleanup,
   onMount,
   Show,
 } from 'solid-js';
+import { Portal } from 'solid-js/web';
 import type { InferOutput } from 'valibot';
 import {
   array,
@@ -25,27 +27,56 @@ import {
 } from 'valibot';
 
 import iconUrl from '../src-tauri/icons/Square71x71Logo.png';
-import { startBuyFlow, startPackBuyFlow } from './buy';
+import {
+  cancelPurchase,
+  pendingPurchase,
+  startBuyFlow,
+  startSoundTestFlow,
+} from './buy';
 import { activationKey, initDeepLinks } from './deeplink';
+import type { Notify, Toast } from './notify';
 import { KEYECHO_ORIGIN } from './origin';
-import { previewPack } from './preview';
+import type { KeyPlayed } from './playback';
+import { keyLabel, onKeyPlayed } from './playback';
 import type { CommandResult, SoundOption } from './services/bindings';
 import { commands } from './services/bindings';
 
 // v1.1: schemaVersion-2 catalog (free + paid). No GitHub fallback.
 const PACK_CATALOG_URL = `${KEYECHO_ORIGIN}/packs/catalog.json`;
 
-const APP_VERSION = '1.1.0';
-const PROJECT_UPDATE_DISMISSED_KEY = `keyecho:v${APP_VERSION}:update-dismissed-session`;
+const APP_VERSION = '1.1.1';
+const UPDATE_TITLE = 'New sounds, safer licenses';
+const UPDATE_DISMISSED_KEY = `keyecho:v${APP_VERSION}:update-dismissed`;
 
 const LICENSE_KEY_STORAGE = 'keyecho:license-key';
 const ENTITLEMENTS_URL = `${KEYECHO_ORIGIN}/packs/entitlements`;
 const PACK_DOWNLOAD_URL = `${KEYECHO_ORIGIN}/packs/download`;
 const RESTORE_URL = `${KEYECHO_ORIGIN}/packs/restore`;
 
-// Pack lists are remote (GitHub) and grow over time, so display names come
-// from token rules rather than a per-pack map: brand tokens that don't
-// title-case cleanly are listed here, everything else is title-cased as-is.
+const PREVIEW_BURST_MS = 1200;
+// Same names and order as the site's catalog filter.
+const CATEGORY_LABELS: Record<string, string> = {
+  clicky: 'Clicky',
+  thocky: 'Thocky',
+  tactile: 'Tactile',
+  linear: 'Linear',
+  'silent-office': 'Silent office',
+  typewriter: 'Typewriter',
+  vintage: 'Vintage',
+  fx: 'FX',
+};
+// Featured paid packs, most popular first.
+const FEATURED_PAID = [
+  'creamy-thock-smooth',
+  'crisp-click-bright',
+  'lecture-hall-laptop',
+  'newsroom-typewriter',
+  'arcade-key-blips',
+];
+
+// Pack lists are remote and grow over time, so display names come from token
+// rules rather than a per-pack map: brand tokens that don't title-case cleanly
+// are listed here, everything else is title-cased as-is.
 const SOUND_NAME_TOKENS: Record<string, string> = {
   abs: 'ABS',
   cherrymx: 'Cherry MX',
@@ -76,6 +107,7 @@ const PackCatalogSchema = object({
       slug: string(),
       tier: string(),
       priceUsd: number(),
+      category: optional(string()),
       downloadUrl: optional(pipe(string(), url())),
     }),
   ),
@@ -88,6 +120,33 @@ const EntitlementsSchema = object({
 
 type PackCatalog = InferOutput<typeof PackCatalogSchema>;
 
+// Lucide outlines at 24x24. Meaning always comes from adjacent text or the
+// control's aria-label, so the icon itself stays hidden from assistive tech.
+const ICON_PATHS = {
+  check: ['M20 6 9 17l-5-5'],
+  play: ['M6 3l14 9-14 9V3z'],
+  square: ['M5 5h14v14H5z'],
+  loading: ['M12 3a9 9 0 1 0 9 9'],
+  x: ['M18 6 6 18', 'm6 6 12 12'],
+} satisfies Record<string, string[]>;
+
+function Icon(props: { name: keyof typeof ICON_PATHS }) {
+  return (
+    <svg
+      aria-hidden="true"
+      class="ui-icon"
+      fill="none"
+      stroke="currentColor"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      stroke-width="1.8"
+      viewBox="0 0 24 24"
+    >
+      <For each={ICON_PATHS[props.name]}>{(path) => <path d={path} />}</For>
+    </svg>
+  );
+}
+
 interface OnlineSound {
   downloadUrl?: string; // free packs only; paid ones are bought on the web
   id: string;
@@ -95,17 +154,18 @@ interface OnlineSound {
   slug: string;
   tier: string;
   priceUsd: number;
+  category?: string;
 }
 
-type ToastTone = 'default' | 'error';
-
-interface Toast {
-  id: string;
-  message: string;
-  tone: ToastTone;
+/** Pack counts for the offer banner, taken from the live catalog. */
+interface CatalogCounts {
+  free: number;
+  paid: number;
 }
 
-type Notify = (message: string, tone?: ToastTone) => void;
+const [catalogCounts, setCatalogCounts] = createSignal<CatalogCounts | null>(
+  null,
+);
 
 function unwrapCommand<T>(result: CommandResult<T>): T {
   if (result.status === 'ok') {
@@ -117,8 +177,7 @@ function unwrapCommand<T>(result: CommandResult<T>): T {
 
 // Installed packs are folders named by slug (crisp-click-bright), but the store
 // sells them under a shorter marketing name (Crisp Click). Resolve through the
-// catalog so both surfaces agree; imported v1 packs aren't in it and keep the
-// name derived from their folder.
+// catalog so both surfaces agree.
 let catalogNameCache: Map<string, string> | null = null;
 
 async function catalogNames(): Promise<Map<string, string>> {
@@ -139,18 +198,13 @@ function packLabel(id: string): string {
   return catalogNameCache?.get(id) ?? displaySoundName(id);
 }
 
-type InstalledSound = SoundOption & { pressOnly: boolean; label: string };
+type InstalledSound = SoundOption & { label: string };
 
 async function loadSounds(): Promise<InstalledSound[]> {
-  const [sounds, pressOnly] = await Promise.all([
-    commands.getSounds(),
-    commands.pressOnlyPacks(),
-  ]);
-  const legacy = new Set(unwrapCommand(pressOnly));
+  const sounds = unwrapCommand(await commands.getSounds());
   const names = await catalogNames();
-  return unwrapCommand(sounds).map((sound) => ({
+  return sounds.map((sound) => ({
     ...sound,
-    pressOnly: legacy.has(sound.value),
     label: names.get(sound.name) ?? displaySoundName(sound.name),
   }));
 }
@@ -162,12 +216,12 @@ async function loadSelectedSound(): Promise<string | null> {
 async function openExternalUrl(url: string, notify: Notify) {
   const result = await commands.openExternalUrl(url);
   if (result.status === 'error') {
-    notify(`Link failed to open. Reason: ${result.error}`, 'error');
+    notify("Link didn't open", { tone: 'error', details: result.error });
   }
 }
 
-async function fetchJson(url: string): Promise<unknown> {
-  const response = await fetch(url);
+async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
+  const response = await fetch(url, init);
   if (!response.ok) {
     throw new Error(`${url} returned ${response.status}`);
   }
@@ -175,35 +229,35 @@ async function fetchJson(url: string): Promise<unknown> {
 }
 
 function mapPackCatalog(catalog: PackCatalog): OnlineSound[] {
-  // Every released pack is listed so paid ones are discoverable in-app: free
-  // packs carry a downloadUrl (direct CDN), paid ones send you to the web store.
-  return (
-    catalog.packs
-      .map((pack) => ({
-        downloadUrl: pack.downloadUrl,
-        id: pack.id,
-        name: pack.name,
-        slug: pack.slug,
-        tier: pack.tier,
-        priceUsd: pack.priceUsd,
-      }))
-      // Free first (the try-it hook), then paid; each group alphabetical.
-      .sort((a, b) => {
-        const aFree = a.tier === 'free' ? 0 : 1;
-        const bFree = b.tier === 'free' ? 0 : 1;
-        return aFree - bFree || a.name.localeCompare(b.name);
-      })
-  );
-}
+  const packs = catalog.packs.map((pack) => ({
+    downloadUrl: pack.downloadUrl,
+    id: pack.id,
+    name: pack.name,
+    slug: pack.slug,
+    tier: pack.tier,
+    priceUsd: pack.priceUsd,
+    category: pack.category,
+  }));
 
-async function loadOfficialOnlineSounds(): Promise<OnlineSound[]> {
-  return mapPackCatalog(
-    await parseAsync(PackCatalogSchema, await fetchJson(PACK_CATALOG_URL)),
-  );
+  const paid = packs.filter((pack) => pack.tier !== 'free').length;
+  setCatalogCounts({ free: packs.length - paid, paid });
+
+  // Crafted packs lead, most-auditioned first; free packs follow. Rest alphabetical.
+  const rank = (pack: { slug: string }) => {
+    const index = FEATURED_PAID.indexOf(pack.slug);
+    return index === -1 ? FEATURED_PAID.length : index;
+  };
+  return packs.sort((a, b) => {
+    const aFree = a.tier === 'free' ? 1 : 0;
+    const bFree = b.tier === 'free' ? 1 : 0;
+    return aFree - bFree || rank(a) - rank(b) || a.name.localeCompare(b.name);
+  });
 }
 
 async function loadOnlineSounds(): Promise<OnlineSound[]> {
-  return loadOfficialOnlineSounds();
+  return mapPackCatalog(
+    await parseAsync(PackCatalogSchema, await fetchJson(PACK_CATALOG_URL)),
+  );
 }
 
 function loadStoredLicenseKey(): string {
@@ -226,15 +280,8 @@ function storeLicenseKey(key: string) {
   }
 }
 
-function entitlementsUrl(key: string): string {
-  const url = new URL(ENTITLEMENTS_URL);
-  url.searchParams.set('key', key);
-  return url.toString();
-}
-
-function packDownloadUrl(key: string, packId: string): string {
+function packDownloadUrl(packId: string): string {
   const url = new URL(PACK_DOWNLOAD_URL);
-  url.searchParams.set('key', key);
   url.searchParams.set('pack', packId);
   return url.toString();
 }
@@ -242,7 +289,9 @@ function packDownloadUrl(key: string, packId: string): string {
 async function fetchEntitledPacks(key: string): Promise<string[]> {
   const data = await parseAsync(
     EntitlementsSchema,
-    await fetchJson(entitlementsUrl(key)),
+    await fetchJson(ENTITLEMENTS_URL, {
+      headers: { Authorization: `Bearer ${key}` },
+    }),
   );
   if (!data.valid) {
     throw new Error('invalid-key');
@@ -271,15 +320,17 @@ async function activateLicense(
       continue;
     }
     try {
-      unwrapCommand(await commands.downloadSound(packDownloadUrl(key, packId)));
+      unwrapCommand(await commands.downloadSound(packDownloadUrl(packId), key));
       installed.push(packId);
-      notify(`'${packLabel(packId)}' downloaded.`);
       // Refresh per pack, not once at the end: downloads take seconds, and
       // waiting for the whole batch makes the list look stale after activation.
       onInstalled?.();
     } catch (error) {
       // One failure shouldn't abort the rest of the purchase.
-      notify(`Download failed. Reason: ${error}`, 'error');
+      notify(`${packLabel(packId)} didn't download`, {
+        tone: 'error',
+        details: String(error),
+      });
     }
   }
   return { entitled: packs, installed };
@@ -300,27 +351,19 @@ async function selectPackById(packId: string): Promise<boolean> {
   return true;
 }
 
-function hasDismissedProjectUpdate(): boolean {
+function hasDismissedUpdate(): boolean {
   try {
-    return sessionStorage.getItem(PROJECT_UPDATE_DISMISSED_KEY) === 'true';
+    return localStorage.getItem(UPDATE_DISMISSED_KEY) === 'true';
   } catch {
     return false;
   }
 }
 
-function rememberProjectUpdateDismissed() {
+function rememberUpdateDismissed() {
   try {
-    sessionStorage.setItem(PROJECT_UPDATE_DISMISSED_KEY, 'true');
+    localStorage.setItem(UPDATE_DISMISSED_KEY, 'true');
   } catch {
     // Dismissal is only a comfort preference; failing to store it is harmless.
-  }
-}
-
-function forgetProjectUpdateDismissed() {
-  try {
-    sessionStorage.removeItem(PROJECT_UPDATE_DISMISSED_KEY);
-  } catch {
-    // Showing the update again is best-effort.
   }
 }
 
@@ -331,13 +374,16 @@ function createNotifier() {
     setToasts((items) => items.filter((item) => item.id !== id));
   };
 
-  const notify: Notify = (message, tone = 'default') => {
+  const notify: Notify = (message, options) => {
     const id =
       globalThis.crypto?.randomUUID?.() ??
       `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-    setToasts((items) => [...items, { id, message, tone }]);
-    window.setTimeout(removeToast, 2400, id);
+    setToasts((items) => [...items, { id, message, ...options }]);
+    // A toast offering an action waits for it; the rest fade on their own.
+    if (!options?.action) {
+      window.setTimeout(removeToast, 2400, id);
+    }
   };
 
   return { notify, removeToast, toasts };
@@ -351,16 +397,98 @@ function Toasts(props: {
     <div aria-live="polite" class="toast-stack">
       <For each={props.toasts()}>
         {(toast) => (
-          <button
-            aria-label="Dismiss notification"
+          <div
             class={`toast-card ${toast.tone === 'error' ? 'toast-error' : ''}`}
-            type="button"
-            onClick={() => props.removeToast(toast.id)}
           >
-            {toast.message}
-          </button>
+            <p class="toast-message">{toast.message}</p>
+            <Show when={toast.details}>
+              {(details) => (
+                <details class="toast-details">
+                  <summary>Details</summary>
+                  <p>{details()}</p>
+                </details>
+              )}
+            </Show>
+            <div class="toast-actions">
+              <Show when={toast.action}>
+                {(action) => (
+                  <button
+                    class="link-button"
+                    type="button"
+                    onClick={() => {
+                      props.removeToast(toast.id);
+                      action().run();
+                    }}
+                  >
+                    {action().label}
+                  </button>
+                )}
+              </Show>
+              <button
+                aria-label="Dismiss notification"
+                class="icon-button"
+                type="button"
+                onClick={() => props.removeToast(toast.id)}
+              >
+                <Icon name="x" />
+              </button>
+            </div>
+          </div>
         )}
       </For>
+    </div>
+  );
+}
+
+function LevelMeter(props: { level: number }) {
+  return (
+    <span aria-hidden="true" class="level-meter">
+      <For each={[1, 2, 3]}>
+        {(step) => <i classList={{ 'is-lit': props.level >= step }} />}
+      </For>
+    </span>
+  );
+}
+
+type StatusTone = 'ready' | 'none' | 'muted';
+
+interface StatusModel {
+  tone: StatusTone;
+  name: string;
+  detail?: string;
+  level?: number;
+  retry?: () => void;
+}
+
+function StatusBar(props: { status: StatusModel }) {
+  return (
+    <div aria-live="polite" class="status-bar">
+      <span
+        aria-hidden="true"
+        class="status-dot"
+        classList={{
+          'is-off': props.status.tone === 'none',
+          'is-muted': props.status.tone === 'muted',
+        }}
+      />
+      <span class="status-name">{props.status.name}</span>
+      <Show when={props.status.detail}>
+        {(detail) => (
+          <span class="status-detail">
+            {detail()}
+            <Show when={props.status.level !== undefined}>
+              <LevelMeter level={props.status.level ?? 0} />
+            </Show>
+          </span>
+        )}
+      </Show>
+      <Show when={props.status.retry}>
+        {(retry) => (
+          <button class="link-button" type="button" onClick={() => retry()()}>
+            Retry
+          </button>
+        )}
+      </Show>
     </div>
   );
 }
@@ -374,7 +502,10 @@ function AutoLaunchSetting(props: { notify: Notify }) {
     try {
       setEnabled(unwrapCommand(await commands.isAutoLaunchEnabled()));
     } catch (error) {
-      props.notify(`Auto launch status failed. Reason: ${error}`, 'error');
+      props.notify("Auto launch status didn't load", {
+        tone: 'error',
+        details: String(error),
+      });
     } finally {
       setLoading(false);
     }
@@ -388,15 +519,13 @@ function AutoLaunchSetting(props: { notify: Notify }) {
     try {
       unwrapCommand(await commands.setAutoLaunch(checked));
       setEnabled(unwrapCommand(await commands.isAutoLaunchEnabled()));
-      props.notify(
-        `Auto launch ${checked ? 'enabled' : 'disabled'} successfully.`,
-      );
     } catch (error) {
       setEnabled(previous);
-      props.notify(
-        `Auto launch ${checked ? 'enabled' : 'disabled'} failed. Reason: ${error}`,
-        'error',
-      );
+      props.notify("Auto launch didn't change", {
+        tone: 'error',
+        details: String(error),
+        action: { label: 'Retry', run: () => void handleToggle(checked) },
+      });
     } finally {
       setLoading(false);
     }
@@ -407,30 +536,41 @@ function AutoLaunchSetting(props: { notify: Notify }) {
   return (
     <label class="relative inline-flex h-6 w-11 items-center">
       <input
-        aria-label="Auto Launch"
+        aria-label="Auto launch"
         checked={enabled()}
         class="peer sr-only"
         disabled={loading()}
         type="checkbox"
         onChange={(event) => handleToggle(event.currentTarget.checked)}
       />
-      <span class="h-6 w-11 rounded-full border border-transparent bg-border shadow-inner transition-colors peer-checked:bg-primary peer-disabled:opacity-60" />
+      <span class="h-6 w-11 cursor-pointer rounded-full border border-transparent bg-border shadow-inner transition-colors peer-checked:bg-primary peer-disabled:cursor-not-allowed peer-disabled:opacity-60" />
       <span class="pointer-events-none absolute left-1 h-4 w-4 rounded-full bg-card shadow transition-transform peer-checked:translate-x-5" />
     </label>
   );
 }
 
-function VolumeSetting(props: { notify: Notify }) {
-  const [volume, setVolume] = createSignal(100);
+// Matches the backend clamp: past 150% the loudest pack clips.
+const MAX_VOLUME = 150;
+
+function VolumeSetting(props: {
+  notify: Notify;
+  volume: () => number;
+  onVolume: (volume: number) => void;
+}) {
   const [loading, setLoading] = createSignal(true);
   let saveTimer: number | undefined;
 
   const refresh = async () => {
     setLoading(true);
     try {
-      setVolume(Math.round(unwrapCommand(await commands.getVolume()) * 100));
+      props.onVolume(
+        Math.round(unwrapCommand(await commands.getVolume()) * 100),
+      );
     } catch (error) {
-      props.notify(`Volume load failed. Reason: ${error}`, 'error');
+      props.notify("Volume didn't load", {
+        tone: 'error',
+        details: String(error),
+      });
     } finally {
       setLoading(false);
     }
@@ -438,17 +578,19 @@ function VolumeSetting(props: { notify: Notify }) {
 
   const saveVolume = async (nextVolume: number) => {
     try {
-      const result = await commands.updateVolume(nextVolume / 100);
-      unwrapCommand(result);
-      props.notify(`Volume changed successfully to ${nextVolume}.`);
+      unwrapCommand(await commands.updateVolume(nextVolume / 100));
     } catch (error) {
-      props.notify(`Volume change failed. Reason: ${error}`, 'error');
+      props.notify("Volume didn't change", {
+        tone: 'error',
+        details: String(error),
+        action: { label: 'Retry', run: () => void saveVolume(nextVolume) },
+      });
       await refresh();
     }
   };
 
   const handleInput = (nextVolume: number) => {
-    setVolume(nextVolume);
+    props.onVolume(nextVolume);
     window.clearTimeout(saveTimer);
     saveTimer = window.setTimeout(saveVolume, 350, nextVolume);
   };
@@ -457,273 +599,380 @@ function VolumeSetting(props: { notify: Notify }) {
   onCleanup(() => window.clearTimeout(saveTimer));
 
   return (
-    <div class="flex min-w-0 items-center gap-3">
-      <span class="w-10 text-right text-sm tabular-nums text-muted-foreground">
-        {volume()}
-      </span>
+    <div class="volume-control">
+      <span class="volume-value">{props.volume()}</span>
       <input
         aria-label="Volume"
-        class="volume-range h-4 w-36 cursor-pointer appearance-none bg-transparent disabled:opacity-60"
+        class="volume-range h-4 w-56 cursor-pointer appearance-none bg-transparent disabled:opacity-60"
         disabled={loading()}
-        max="100"
+        max={MAX_VOLUME}
         min="0"
-        style={{ '--volume-progress': `${volume()}%` }}
+        style={{
+          '--volume-progress': `${(props.volume() / MAX_VOLUME) * 100}%`,
+        }}
         step="1"
         type="range"
-        value={volume()}
+        value={props.volume()}
         onInput={(event) => handleInput(Number(event.currentTarget.value))}
       />
     </div>
   );
 }
 
-function SoundSetting(props: { notify: Notify; reloadSignal: () => number }) {
-  const [downloadOpen, setDownloadOpen] = createSignal(false);
-  const [sounds, soundControls] = createResource(loadSounds);
-  const [selectedSound, selectedSoundControls] =
-    createResource(loadSelectedSound);
+/** The app's one dropdown: the pack picker and the Browse packs filters. */
+function SelectMenu(props: {
+  label: string;
+  options: { value: string; label: string }[];
+  value: string | undefined;
+  placeholder?: string;
+  disabled?: boolean;
+  preparing?: boolean;
+  onSelect: (value: string) => void;
+}) {
+  const menuId = createUniqueId();
+  const [open, setOpen] = createSignal(false);
+  const [active, setActive] = createSignal(0);
+  const [placement, setPlacement] = createSignal<JSX.CSSProperties>({});
+  let root: HTMLDivElement | undefined;
+  let menu: HTMLUListElement | undefined;
 
-  // Refetch when packs change elsewhere (licence key, deep link). The selection
-  // can change too — a deep link arms the pack it just installed — so pull both,
-  // otherwise the dropdown keeps showing the previous pack.
-  createEffect(
-    on(
-      props.reloadSignal,
-      () => {
-        void soundControls.refetch();
-        void selectedSoundControls.refetch();
-      },
-      { defer: true },
-    ),
-  );
+  const selected = () => props.options.find((o) => o.value === props.value);
+  const optionId = (index: number) => `${menuId}-option-${index}`;
 
-  const soundList = createMemo(() => sounds() ?? []);
-  const hasSounds = createMemo(() => soundList().length > 0);
-  const existedSoundNames = createMemo(() =>
-    soundList().map((sound) => sound.name),
-  );
-
-  const [preparing, setPreparing] = createSignal(false);
-  const handleSelect = async (sound: string) => {
-    if (!sound) {
+  const openMenu = () => {
+    if (props.disabled || props.options.length === 0) {
       return;
     }
-
-    selectedSoundControls.mutate(sound);
-
-    // Selecting decodes the whole pack in Rust, which takes a moment — without
-    // this the panel looks idle and the audition seems to fire late.
-    setPreparing(true);
-    try {
-      const result = await commands.selectSound(sound);
-      if (result.status === 'error') {
-        props.notify(
-          'Your selected sound needs an update. Please re-download it.',
-          'error',
-        );
-      } else {
-        const soundItem = soundList().find((item) => item.value === sound);
-        props.notify(`'${soundItem?.label ?? 'Sound'}' chosen successfully.`);
-        void commands.previewPackSound(); // audition the pack so you hear what you picked
-      }
-    } finally {
-      setPreparing(false);
+    const index = props.options.findIndex((o) => o.value === props.value);
+    setActive(Math.max(index, 0));
+    // Fixed to the window, so a scrolling dialog can't carry or clip it.
+    const rect = root?.getBoundingClientRect();
+    if (rect) {
+      const gap = 12;
+      const offset = 4;
+      const below = window.innerHeight - rect.bottom - gap - offset;
+      const above = rect.top - gap - offset;
+      const up = below < 160 && above > below;
+      setPlacement({
+        left: `${rect.left}px`,
+        width: `${rect.width}px`,
+        'max-height': `${Math.min(328, up ? above : below)}px`,
+        ...(up
+          ? { bottom: `${window.innerHeight - rect.top + offset}px` }
+          : { top: `${rect.bottom + offset}px` }),
+      });
     }
-
-    await selectedSoundControls.refetch();
+    setOpen(true);
   };
 
-  const [importing, setImporting] = createSignal(false);
-  // Only mention importing when v1 packs actually exist on this machine.
-  const [legacyCount, legacyControls] = createResource(async () => {
-    const result = await commands.legacyPacksAvailable();
-    return result.status === 'ok' ? result.data : 0;
+  const choose = (value: string) => {
+    setOpen(false);
+    if (value !== props.value) {
+      props.onSelect(value);
+    }
+  };
+
+  const move = (delta: number) => {
+    const count = props.options.length;
+    setActive((index) => (index + delta + count) % count);
+    menu
+      ?.querySelector(`#${optionId(active())}`)
+      ?.scrollIntoView({ block: 'nearest' });
+  };
+
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (!open()) {
+      if (['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(event.key)) {
+        event.preventDefault();
+        openMenu();
+      }
+      return;
+    }
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault();
+        move(1);
+        break;
+      case 'ArrowUp':
+        event.preventDefault();
+        move(-1);
+        break;
+      case 'Home':
+        event.preventDefault();
+        move(-active());
+        break;
+      case 'End':
+        event.preventDefault();
+        move(props.options.length - 1 - active());
+        break;
+      case 'Enter':
+      case ' ': {
+        event.preventDefault();
+        const option = props.options[active()];
+        if (option) {
+          choose(option.value);
+        }
+        break;
+      }
+      case 'Escape':
+      case 'Tab':
+        setOpen(false);
+        break;
+    }
+  };
+
+  createEffect(() => {
+    if (!open()) {
+      return;
+    }
+    const outside = (event: Event) =>
+      !root?.contains(event.target as Node) &&
+      !menu?.contains(event.target as Node);
+    const onPointerDown = (event: PointerEvent) => {
+      if (outside(event)) {
+        setOpen(false);
+      }
+    };
+    // Like a native select: scrolling anything behind the menu closes it.
+    const onScroll = (event: Event) => {
+      if (outside(event)) {
+        setOpen(false);
+      }
+    };
+    const close = () => setOpen(false);
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', close);
+    onCleanup(() => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', close);
+    });
   });
-  const hasLegacy = () => (legacyCount() ?? 0) > 0;
-  const handleImport = async () => {
-    setImporting(true);
-    try {
-      const result = await commands.importSoundPack();
-      if (result.status === 'error') {
-        props.notify('Could not import your previous packs.', 'error');
-        return;
-      }
-      if (result.data.length === 0) {
-        props.notify('No packs found from a previous KeyEcho version.');
-        return;
-      }
-      await Promise.all([soundControls.refetch(), legacyControls.refetch()]);
-      props.notify(
-        `Imported ${result.data.length} v1 pack${result.data.length > 1 ? 's' : ''}. These play a press sound only — packs from Browse also have a key-up sound.`,
-      );
-    } finally {
-      setImporting(false);
-    }
-  };
 
-  const status = () => {
-    if (preparing()) {
-      return 'PREPARING SOUND…';
+  createEffect(() => {
+    if (props.disabled) {
+      setOpen(false);
     }
-    if (sounds.loading) {
-      return 'LOADING PACKS…';
-    }
-    if (sounds.error) {
-      return 'PACK LIST UNAVAILABLE';
-    }
-    if (!hasSounds()) {
-      return 'NO PACKS · DOWNLOAD TO START';
-    }
-    if (!selectedSound()) {
-      return 'SELECT A PACK TO ARM IT';
-    }
-    return 'TYPE ANYWHERE TO HEAR IT';
-  };
+  });
 
   return (
-    <div class="space-y-3">
-      <div class="flex items-baseline justify-between gap-4">
-        <span class="mono-label mono-red">Sound Pack</span>
-        <span aria-live="polite" class="mono-label">
-          {status()}
-        </span>
-      </div>
-
-      <Show
-        fallback={
-          // Empty bay: same footprint as the loaded selector, so the panel keeps
-          // its height and its left-aligned grid instead of a centered block.
-          <div class="space-y-3">
-            {/* Same bordered field the selector will be — reads as "this is
-                where a pack goes", just empty. */}
-            <div class="ui-field pack-empty-field w-full">No pack loaded</div>
-
-            {/* Upgrading from v1 is the one case where the app looks broken
-                ("my sounds are gone"), so say so plainly and lead with the fix. */}
-            <Show when={hasLegacy()}>
-              <p class="pack-recover-note">
-                Upgrading from KeyEcho v1? Your {legacyCount()} pack
-                {legacyCount() === 1 ? '' : 's'} are still on this Mac.
-              </p>
-            </Show>
-
-            <div class="flex items-center justify-between gap-4">
-              <Show fallback={<span />} when={hasLegacy()}>
-                <button
-                  class="secondary-button shrink-0"
-                  disabled={importing()}
-                  type="button"
-                  onClick={handleImport}
-                >
-                  {importing()
-                    ? 'Importing…'
-                    : `Import ${legacyCount()} v1 pack${legacyCount() === 1 ? '' : 's'}`}
-                </button>
-              </Show>
-              <button
-                class="primary-button shrink-0"
-                disabled={sounds.loading}
-                type="button"
-                onClick={() => setDownloadOpen(true)}
-              >
-                Browse packs
-              </button>
-            </div>
-          </div>
-        }
-        when={hasSounds()}
+    <div ref={root} class="pack-select">
+      <button
+        aria-activedescendant={open() ? optionId(active()) : undefined}
+        aria-busy={props.preparing}
+        aria-controls={menuId}
+        aria-expanded={open()}
+        aria-haspopup="listbox"
+        aria-label={props.label}
+        class="ui-field select-field pack-select-trigger w-full"
+        classList={{ 'is-open': open(), 'is-preparing': props.preparing }}
+        disabled={props.disabled}
+        type="button"
+        onClick={() => (open() ? setOpen(false) : openMenu())}
+        onKeyDown={onKeyDown}
       >
-        <select
-          aria-busy={preparing()}
-          aria-label="Sound"
-          class="ui-field select-field w-full"
-          classList={{ 'is-preparing': preparing() }}
-          disabled={sounds.loading || preparing()}
-          value={selectedSound() ?? ''}
-          onChange={(event) => handleSelect(event.currentTarget.value)}
-        >
-          <option disabled value="">
-            Select a pack
-          </option>
-          <For each={soundList()}>
-            {(sound) => (
-              <option value={sound.value}>
-                {sound.label}
-                {sound.pressOnly ? ' · press only (v1)' : ''}
-              </option>
-            )}
-          </For>
-        </select>
-
-        <div class="flex items-center justify-between gap-4">
-          <Show fallback={<span />} when={sounds.error}>
-            <p class="text-sm text-destructive">Sound list failed to load.</p>
-          </Show>
-          <div class="flex shrink-0 items-center gap-2">
-            <Show when={hasLegacy()}>
-              <button
-                class="secondary-button shrink-0"
-                disabled={importing()}
-                title="One-off: bring in your packs from KeyEcho v1. They play a press sound only — no key-up sound. Nothing is uploaded."
-                type="button"
-                onClick={handleImport}
-              >
-                {importing() ? 'Importing…' : `Import v1 (${legacyCount()})`}
-              </button>
-            </Show>
-            <button
-              class="secondary-button shrink-0"
-              disabled={sounds.loading}
-              type="button"
-              onClick={() => setDownloadOpen(true)}
-            >
-              Browse packs…
-            </button>
-          </div>
-        </div>
+        <span classList={{ 'pack-select-placeholder': !selected() }}>
+          {selected()?.label ?? props.placeholder ?? ''}
+        </span>
+      </button>
+      <Show when={open()}>
+        <Portal>
+          <ul
+            ref={menu}
+            aria-label={props.label}
+            class="pack-select-menu"
+            id={menuId}
+            role="listbox"
+            style={placement()}
+          >
+            <For each={props.options}>
+              {(option, index) => (
+                <li
+                  aria-selected={option.value === props.value}
+                  classList={{ 'is-active': index() === active() }}
+                  id={optionId(index())}
+                  role="option"
+                  onClick={() => choose(option.value)}
+                  onPointerMove={() => setActive(index())}
+                >
+                  <span>{option.label}</span>
+                  <Show when={option.value === props.value}>
+                    <Icon name="check" />
+                  </Show>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Portal>
       </Show>
-
-      <DownloadDialog
-        existedSoundNames={existedSoundNames()}
-        notify={props.notify}
-        open={downloadOpen()}
-        onClose={() => setDownloadOpen(false)}
-        onDownloaded={async () => {
-          await soundControls.refetch();
-        }}
-      />
     </div>
   );
 }
 
-function DownloadDialog(props: {
-  existedSoundNames: string[];
+function SettingRow(props: { label: string; children: JSX.Element }) {
+  return (
+    <div class="box-border grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 py-2">
+      <span class="mono-label">{props.label}</span>
+      <div class="min-w-0">{props.children}</div>
+    </div>
+  );
+}
+
+function PackAction(props: {
+  active: boolean;
+  installed: boolean;
+  sound: OnlineSound;
+  downloading: boolean;
+  notify: Notify;
+  onDownload: () => void;
+  onUse: () => void;
+  openLicense: () => void;
+}) {
+  const isPaid = () => props.sound.tier !== 'free';
+
+  return (
+    <Show
+      fallback={
+        <Show
+          fallback={
+            <button
+              class="secondary-button sound-download-action"
+              disabled={props.downloading}
+              type="button"
+              onClick={props.onDownload}
+            >
+              <Show fallback="Download" when={props.downloading}>
+                Saving…
+              </Show>
+            </button>
+          }
+          when={isPaid()}
+        >
+          {/* One purchase in this dialog: every paid row leads to the same
+              offer as the banner. Single packs stay on their web pages. */}
+          <button
+            class="text-button sound-download-action"
+            disabled={pendingPurchase() !== null}
+            type="button"
+            onClick={() =>
+              void startBuyFlow(props.notify, props.openLicense, {
+                campaign: 'pack_row',
+                content: props.sound.slug,
+              })
+            }
+          >
+            Unlock all
+          </button>
+        </Show>
+      }
+      when={props.installed}
+    >
+      <Show
+        fallback={
+          <button
+            class="secondary-button sound-download-action"
+            type="button"
+            onClick={props.onUse}
+          >
+            Use
+          </button>
+        }
+        when={props.active}
+      >
+        <button
+          class="secondary-button sound-download-action is-ghost"
+          disabled
+          type="button"
+        >
+          In use
+        </button>
+      </Show>
+    </Show>
+  );
+}
+
+function OfferBanner(props: { notify: Notify; openLicense: () => void }) {
+  const counts = () => catalogCounts();
+  const waiting = () => pendingPurchase()?.kind === 'all';
+
+  return (
+    <section class="sound-library-offer">
+      <div class="min-w-0">
+        <h3 class="sound-library-offer-title">
+          Every Crafted Pack, now and future
+        </h3>
+        <p class="sound-library-offer-copy">
+          <Show
+            fallback={
+              <>
+                <span class="whitespace-nowrap">{counts()?.paid} packs</span>
+                {' · '}
+                <span class="whitespace-nowrap">free packs stay free</span>
+                {' · '}
+                <span class="whitespace-nowrap">14-day refund</span>
+              </>
+            }
+            when={waiting()}
+          >
+            Finish the purchase in your browser ·{' '}
+            <button class="link-button" type="button" onClick={cancelPurchase}>
+              Cancel
+            </button>
+          </Show>
+        </p>
+      </div>
+      <button
+        class="primary-button sound-library-offer-button"
+        classList={{ 'is-ghost': pendingPurchase() !== null }}
+        disabled={pendingPurchase() !== null}
+        title="Pay on keyecho.app · unlocks here automatically"
+        type="button"
+        onClick={() => void startBuyFlow(props.notify, props.openLicense)}
+      >
+        <Show fallback="Get every pack · $9.99" when={waiting()}>
+          Waiting for keyecho.app…
+        </Show>
+      </button>
+    </section>
+  );
+}
+
+function BrowseDialog(props: {
+  activeValue: string | undefined;
+  installed: InstalledSound[];
   notify: Notify;
   open: boolean;
+  openLicense: () => void;
   onClose: () => void;
   onDownloaded: () => Promise<void>;
+  onUse: (sound: InstalledSound) => void;
 }) {
   const [onlineSounds, setOnlineSounds] = createSignal<OnlineSound[]>([]);
   const [loading, setLoading] = createSignal(false);
-  const [loadingError, setLoadingError] = createSignal<string | null>(null);
+  const [loadFailed, setLoadFailed] = createSignal(false);
   const [downloadingName, setDownloadingName] = createSignal<string | null>(
     null,
   );
+  const [playingId, setPlayingId] = createSignal<string | null>(null);
+  const [loadingId, setLoadingId] = createSignal<string | null>(null);
+  const [previewFailed, setPreviewFailed] = createSignal<string | null>(null);
   let requestId = 0;
 
   const loadOnlineSoundList = async () => {
     const currentRequestId = ++requestId;
     setLoading(true);
-    setLoadingError(null);
+    setLoadFailed(false);
 
     try {
       const parsed = await loadOnlineSounds();
       if (currentRequestId === requestId) {
         setOnlineSounds(parsed);
       }
-    } catch (error) {
+    } catch {
       if (currentRequestId === requestId) {
-        setLoadingError(String(error));
+        setOnlineSounds([]);
+        setLoadFailed(true);
       }
     } finally {
       if (currentRequestId === requestId) {
@@ -732,6 +981,9 @@ function DownloadDialog(props: {
     }
   };
 
+  const installedFor = (sound: OnlineSound) =>
+    props.installed.find((item) => sound.id.startsWith(item.name));
+
   const handleDownload = async (sound: OnlineSound) => {
     if (!sound.downloadUrl) {
       return;
@@ -739,27 +991,64 @@ function DownloadDialog(props: {
     setDownloadingName(sound.name);
 
     try {
-      const result = await commands.downloadSound(sound.downloadUrl);
-      unwrapCommand(result);
-      props.notify('Download successful.');
+      unwrapCommand(await commands.downloadSound(sound.downloadUrl));
       await props.onDownloaded();
     } catch (error) {
-      props.notify(`Download failed. Reason: ${error}`, 'error');
+      props.notify(`${sound.name} didn't download`, {
+        tone: 'error',
+        details: String(error),
+        action: { label: 'Retry', run: () => void handleDownload(sound) },
+      });
     } finally {
       setDownloadingName(null);
     }
   };
 
   const handlePreview = async (sound: OnlineSound) => {
+    setPreviewFailed(null);
+    setPlayingId(null);
+    setLoadingId(sound.id);
     try {
-      await previewPack(sound.id);
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      // eslint-disable-next-line no-console
-      console.error('[keyecho] preview failed', sound.id, error);
-      props.notify(`Preview failed (${sound.id}): ${reason}`, 'error');
+      const result = await commands.previewCatalogPack(sound.id);
+      if (result.status === 'error') {
+        throw new Error(result.error);
+      }
+      setPlayingId(sound.id);
+      window.setTimeout(
+        () => setPlayingId((id) => (id === sound.id ? null : id)),
+        PREVIEW_BURST_MS,
+      );
+    } catch {
+      setPlayingId(null);
+      setPreviewFailed(sound.id);
+    } finally {
+      setLoadingId((id) => (id === sound.id ? null : id));
     }
   };
+
+  const [scrolled, setScrolled] = createSignal(false);
+
+  // Two independent filters, like the site's catalog: sound type and price.
+  const [category, setCategory] = createSignal<string | null>(null);
+  const [price, setPrice] = createSignal<'free' | 'paid' | null>(null);
+  const categories = createMemo(() =>
+    Object.keys(CATEGORY_LABELS).filter((id) =>
+      onlineSounds().some((sound) => sound.category === id),
+    ),
+  );
+  const visibleSounds = createMemo(() =>
+    onlineSounds().filter(
+      (sound) =>
+        (!category() || sound.category === category()) &&
+        (!price() || (price() === 'free') === (sound.tier === 'free')),
+    ),
+  );
+  const firstFree = createMemo(
+    () => visibleSounds().find((sound) => sound.tier === 'free')?.id,
+  );
+  // Crafted packs lead under the banner; mark only where free ones begin.
+  const mixed = () =>
+    firstFree() !== undefined && visibleSounds()[0]?.id !== firstFree();
 
   createEffect(() => {
     if (props.open) {
@@ -777,7 +1066,7 @@ function DownloadDialog(props: {
           }
         }}
       >
-        <section class="dialog-panel">
+        <section class="dialog-panel is-fixed">
           <header class="dialog-header">
             <h2 class="dialog-title">Browse packs</h2>
             <button
@@ -786,117 +1075,175 @@ function DownloadDialog(props: {
               type="button"
               onClick={props.onClose}
             >
-              <span aria-hidden="true" class="close-icon" />
+              <Icon name="x" />
             </button>
           </header>
 
-          <div class="dialog-body">
-            <Show
-              fallback={
-                <For
-                  each={onlineSounds()}
-                  fallback={
-                    <div class="dialog-state">No packs found online.</div>
-                  }
-                >
-                  {(sound) => {
-                    const isExisted = () =>
-                      props.existedSoundNames.some((name) =>
-                        sound.id.startsWith(name),
-                      );
-                    const isDownloading = () =>
-                      downloadingName() === sound.name;
+          <div
+            class="dialog-body"
+            classList={{ 'is-scrolled': scrolled() }}
+            onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 0)}
+          >
+            <Show when={loading()}>
+              <div class="dialog-state">Loading packs</div>
+            </Show>
 
-                    const isPaid = () => sound.tier !== 'free';
+            <Show when={loadFailed()}>
+              <div class="dialog-state dialog-state-error">
+                <p class="m-0">
+                  <Show
+                    fallback="Pack list didn't load"
+                    when={props.installed.length > 0}
+                  >
+                    Offline · installed packs still play
+                  </Show>
+                </p>
+                <button
+                  class="link-button"
+                  type="button"
+                  onClick={() => void loadOnlineSoundList()}
+                >
+                  Retry
+                </button>
+              </div>
+            </Show>
+
+            <Show when={!loading() && !loadFailed()}>
+              <Show
+                fallback={
+                  <div class="dialog-state">
+                    <p class="m-0">No packs online right now</p>
+                    <button
+                      class="link-button"
+                      type="button"
+                      onClick={() => void loadOnlineSoundList()}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                }
+                when={onlineSounds().length > 0}
+              >
+                <OfferBanner
+                  notify={props.notify}
+                  openLicense={props.openLicense}
+                />
+                <Show when={categories().length > 1}>
+                  <div class="pack-filters">
+                    <div class="pack-filter">
+                      <span class="pack-filter-label">Sound</span>
+                      <SelectMenu
+                        label="Sound"
+                        options={[
+                          { value: '', label: 'All' },
+                          ...categories().map((id) => ({
+                            value: id,
+                            label: CATEGORY_LABELS[id],
+                          })),
+                        ]}
+                        value={category() ?? ''}
+                        onSelect={(value) => setCategory(value || null)}
+                      />
+                    </div>
+                    <div class="pack-filter">
+                      <span class="pack-filter-label">Price</span>
+                      <SelectMenu
+                        label="Price"
+                        options={[
+                          { value: '', label: 'All' },
+                          { value: 'free', label: 'Free' },
+                          { value: 'paid', label: 'Crafted' },
+                        ]}
+                        value={price() ?? ''}
+                        onSelect={(value) =>
+                          setPrice(
+                            value === 'free' || value === 'paid' ? value : null,
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+                </Show>
+                <Show when={visibleSounds().length === 0}>
+                  <div class="dialog-state">No packs match these filters.</div>
+                </Show>
+                <For each={visibleSounds()}>
+                  {(sound) => {
+                    const installed = () => installedFor(sound);
 
                     return (
-                      <div class="sound-download-row has-preview">
-                        <button
-                          aria-label={`Preview ${sound.name}`}
-                          class="secondary-button sound-preview-action"
-                          title="Hear a few keys"
-                          type="button"
-                          onClick={() => handlePreview(sound)}
-                        >
-                          ▶
-                        </button>
-                        {/* Already the catalog's marketing name — don't run it
-                            through the slug deriver, which splits on hyphens. */}
-                        <span class="sound-download-name" title={sound.name}>
-                          {sound.name}
-                        </span>
-                        <span class="mono-label sound-download-price">
-                          {isPaid() ? `$${sound.priceUsd.toFixed(2)}` : 'FREE'}
-                        </span>
-                        <Show
-                          fallback={
-                            // Already installed = already bought. Re-downloading
-                            // a paid pack needs the licence key, so that lives in
-                            // the License dialog, not here — state, not action.
-                            <Show
-                              fallback={
-                                <span class="mono-label sound-download-owned">
-                                  Installed
-                                </span>
-                              }
-                              when={!isExisted()}
-                            >
-                              <button
-                                class="secondary-button sound-download-action"
-                                type="button"
-                                onClick={() =>
-                                  void startPackBuyFlow(
-                                    sound.slug,
-                                    props.notify,
-                                  )
-                                }
-                              >
-                                Get
-                              </button>
-                            </Show>
-                          }
-                          when={!isPaid()}
-                        >
+                      <>
+                        <Show when={mixed() && sound.id === firstFree()}>
+                          <p class="group-label">Free packs</p>
+                        </Show>
+                        <div class="sound-download-row has-preview">
                           <button
-                            class={`${isExisted() ? 'secondary-button' : 'primary-button'} sound-download-action`}
-                            disabled={downloadingName() !== null}
+                            aria-busy={loadingId() === sound.id}
+                            aria-label={`Preview ${sound.name}`}
+                            class="secondary-button sound-preview-action"
+                            classList={{
+                              'is-loading': loadingId() === sound.id,
+                            }}
+                            title="Hear a few keys"
                             type="button"
-                            onClick={() => handleDownload(sound)}
+                            onClick={() => void handlePreview(sound)}
                           >
                             <Show
-                              fallback={isExisted() ? 'Redownload' : 'Download'}
-                              when={isDownloading()}
+                              fallback={
+                                <Show
+                                  fallback={<Icon name="play" />}
+                                  when={playingId() === sound.id}
+                                >
+                                  <Icon name="square" />
+                                </Show>
+                              }
+                              when={loadingId() === sound.id}
                             >
-                              Saving...
+                              <Icon name="loading" />
                             </Show>
                           </button>
-                        </Show>
-                      </div>
+                          {/* Already the catalog's marketing name — don't run it
+                              through the slug deriver, which splits on hyphens. */}
+                          <span class="sound-download-name" title={sound.name}>
+                            {sound.name}
+                            <Show when={previewFailed() === sound.id}>
+                              <span class="row-note">Preview didn't load</span>
+                            </Show>
+                          </span>
+                          {/* Price lives in the group label, the action and the banner. */}
+                          <span class="sound-download-price">
+                            <Show when={installed()}>
+                              <span class="installed-mark">
+                                Installed <Icon name="check" />
+                              </span>
+                            </Show>
+                          </span>
+                          <PackAction
+                            active={
+                              installed() !== undefined &&
+                              installed()?.value === props.activeValue
+                            }
+                            downloading={downloadingName() === sound.name}
+                            installed={installed() !== undefined}
+                            notify={props.notify}
+                            openLicense={props.openLicense}
+                            sound={sound}
+                            onDownload={() => void handleDownload(sound)}
+                            onUse={() => {
+                              const match = installed();
+                              if (match) {
+                                props.onUse(match);
+                              }
+                            }}
+                          />
+                        </div>
+                      </>
                     );
                   }}
                 </For>
-              }
-              when={loading()}
-            >
-              <div class="dialog-state">Loading...</div>
-            </Show>
-
-            <Show when={loadingError()}>
-              <p class="dialog-state dialog-state-error">
-                Online sounds failed to load.
-              </p>
+              </Show>
             </Show>
           </div>
-
-          <footer class="dialog-footer">
-            <button
-              class="secondary-button"
-              type="button"
-              onClick={props.onClose}
-            >
-              Close
-            </button>
-          </footer>
         </section>
       </div>
     </Show>
@@ -930,7 +1277,7 @@ function LicenseDialog(props: {
               type="button"
               onClick={props.onClose}
             >
-              <span aria-hidden="true" class="close-icon" />
+              <Icon name="x" />
             </button>
           </header>
 
@@ -944,11 +1291,7 @@ function LicenseDialog(props: {
           </div>
 
           <footer class="dialog-footer">
-            <button
-              class="secondary-button"
-              type="button"
-              onClick={props.onClose}
-            >
+            <button class="text-button" type="button" onClick={props.onClose}>
               Close
             </button>
           </footer>
@@ -958,6 +1301,13 @@ function LicenseDialog(props: {
   );
 }
 
+interface CheckFailure {
+  message: string;
+  hint?: string;
+  details?: string;
+  retry?: boolean;
+}
+
 function LicenseSetting(props: {
   notify: Notify;
   onSoundsChanged: () => void;
@@ -965,12 +1315,13 @@ function LicenseSetting(props: {
   const [key, setKey] = createSignal(loadStoredLicenseKey());
   const [entitled, setEntitled] = createSignal<string[] | null>(null);
   const [checking, setChecking] = createSignal(false);
-  const [checkError, setCheckError] = createSignal<string | null>(null);
+  const [failure, setFailure] = createSignal<CheckFailure | null>(null);
   const [downloadingPack, setDownloadingPack] = createSignal<string | null>(
     null,
   );
   const [restoreOpen, setRestoreOpen] = createSignal(false);
   const [restoreEmail, setRestoreEmail] = createSignal('');
+  const [restoreSent, setRestoreSent] = createSignal(false);
   const [restoring, setRestoring] = createSignal(false);
   const [installed, installedControls] = createResource(async () => {
     return new Set((await loadSounds()).map((sound) => sound.name));
@@ -982,13 +1333,16 @@ function LicenseSetting(props: {
     setDownloadingPack(packId);
     try {
       unwrapCommand(
-        await commands.downloadSound(packDownloadUrl(key().trim(), packId)),
+        await commands.downloadSound(packDownloadUrl(packId), key().trim()),
       );
       await installedControls.refetch();
       props.onSoundsChanged();
-      props.notify(`'${packLabel(packId)}' downloaded.`);
     } catch (error) {
-      props.notify(`Download failed. Reason: ${error}`, 'error');
+      props.notify(`${packLabel(packId)} didn't download`, {
+        tone: 'error',
+        details: String(error),
+        action: { label: 'Retry', run: () => void download(packId) },
+      });
     } finally {
       setDownloadingPack(null);
     }
@@ -997,13 +1351,13 @@ function LicenseSetting(props: {
   const check = async () => {
     const trimmed = key().trim();
     if (!trimmed) {
-      setCheckError('Enter your license key.');
+      setFailure({ message: 'Paste the key from your email' });
       setEntitled(null);
       return;
     }
 
     setChecking(true);
-    setCheckError(null);
+    setFailure(null);
     try {
       const { entitled } = await activateLicense(trimmed, props.notify, () => {
         void installedControls.refetch();
@@ -1011,19 +1365,21 @@ function LicenseSetting(props: {
       });
       setEntitled(entitled);
       setKey(trimmed);
-      props.notify(
-        entitled.length
-          ? `License restored — ${entitled.length} pack${entitled.length === 1 ? '' : 's'} available.`
-          : 'License valid, but no packs are entitled yet.',
-      );
       await installedControls.refetch();
       props.onSoundsChanged();
     } catch (error) {
       setEntitled(null);
-      setCheckError(
+      setFailure(
         error instanceof Error && error.message === 'invalid-key'
-          ? 'License key not recognized.'
-          : `Could not reach the license server. Reason: ${error}`,
+          ? {
+              message: "That key isn't recognized",
+              hint: 'Check for a missing character, or send the key to your email below.',
+            }
+          : {
+              message: "Can't reach keyecho.app right now",
+              details: String(error),
+              retry: true,
+            },
       );
     } finally {
       setChecking(false);
@@ -1034,7 +1390,7 @@ function LicenseSetting(props: {
     storeLicenseKey('');
     setKey('');
     setEntitled(null);
-    setCheckError(null);
+    setFailure(null);
   };
 
   // Restore-by-email: the endpoint never reveals whether the address had
@@ -1052,14 +1408,12 @@ function LicenseSetting(props: {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ email }),
       });
-      props.notify('Check your email — we sent your key(s).');
-      setRestoreOpen(false);
-      setRestoreEmail('');
-    } catch {
-      props.notify(
-        "Couldn't reach the server. Try again in a moment.",
-        'error',
-      );
+      setRestoreSent(true);
+    } catch (error) {
+      props.notify("Can't reach keyecho.app right now", {
+        tone: 'error',
+        details: String(error),
+      });
     } finally {
       setRestoring(false);
     }
@@ -1074,14 +1428,10 @@ function LicenseSetting(props: {
   return (
     <div class="space-y-3">
       <div class="flex items-baseline justify-between gap-4">
-        <span class="mono-label mono-red">License Key</span>
+        <span class="mono-label mono-red">License key</span>
         <Show when={entitled() !== null}>
-          <button
-            class="mono-label card-foot-link"
-            type="button"
-            onClick={forget}
-          >
-            Forget key
+          <button class="link-button" type="button" onClick={forget}>
+            Forget this key
           </button>
         </Show>
       </div>
@@ -1097,6 +1447,7 @@ function LicenseSetting(props: {
           aria-label="License key"
           autocomplete="off"
           class="ui-field w-full"
+          classList={{ 'is-invalid': failure() !== null }}
           placeholder="KE1.…"
           spellcheck={false}
           value={key()}
@@ -1107,50 +1458,85 @@ function LicenseSetting(props: {
           disabled={checking()}
           type="submit"
         >
-          <Show fallback="Restore" when={checking()}>
+          <Show fallback="Activate" when={checking()}>
             Checking…
           </Show>
         </button>
       </form>
 
-      <Show when={checkError()}>
-        <p class="text-sm text-destructive">{checkError()}</p>
+      <Show
+        fallback={
+          <Show when={entitled() === null}>
+            <p class="field-hint">Paste the key from your email.</p>
+          </Show>
+        }
+        when={failure()}
+      >
+        {(problem) => (
+          <div class="field-error">
+            <p class="field-error-title">{problem().message}</p>
+            <Show when={problem().hint}>
+              {(hint) => <p class="field-hint">{hint()}</p>}
+            </Show>
+            <Show when={problem().retry}>
+              <button class="link-button" type="button" onClick={check}>
+                Retry
+              </button>
+            </Show>
+            <Show when={problem().details}>
+              {(details) => (
+                <details class="field-details">
+                  <summary>Details</summary>
+                  <p>{details()}</p>
+                </details>
+              )}
+            </Show>
+          </div>
+        )}
       </Show>
 
-      <div>
+      <div class="restore-block">
         <button
-          class="mono-label card-foot-link"
+          class="link-button"
           type="button"
           onClick={() => setRestoreOpen((open) => !open)}
         >
-          Lost your key? Restore by email
+          Lost your key? Send it to my email
         </button>
         <Show when={restoreOpen()}>
           <form
-            class="mt-2 flex items-center gap-2"
+            class="restore-form"
             onSubmit={(event) => {
               event.preventDefault();
               void restore();
             }}
           >
-            <input
-              aria-label="Email for restore"
-              autocomplete="email"
-              class="ui-field w-full"
-              placeholder="you@example.com"
-              type="email"
-              value={restoreEmail()}
-              onInput={(event) => setRestoreEmail(event.currentTarget.value)}
-            />
-            <button
-              class="primary-button shrink-0"
-              disabled={restoring()}
-              type="submit"
-            >
-              <Show fallback="Send" when={restoring()}>
-                Sending…
-              </Show>
-            </button>
+            <span class="mono-label">Email</span>
+            <div class="flex items-center gap-2">
+              <input
+                aria-label="Email"
+                autocomplete="email"
+                class="ui-field w-full"
+                placeholder="you@example.com"
+                type="email"
+                value={restoreEmail()}
+                onInput={(event) => setRestoreEmail(event.currentTarget.value)}
+              />
+              <button
+                class="secondary-button shrink-0"
+                disabled={restoring()}
+                type="submit"
+              >
+                <Show fallback="Send key" when={restoring()}>
+                  Sending…
+                </Show>
+              </button>
+            </div>
+            <Show when={restoreSent()}>
+              <p class="field-hint">
+                If that email has a purchase, the key is on its way.
+              </p>
+            </Show>
           </form>
         </Show>
       </div>
@@ -1158,15 +1544,17 @@ function LicenseSetting(props: {
       <Show when={entitled()}>
         {(packs) => (
           <Show
-            fallback={
-              <p class="mono-label">No packs entitled to this key yet.</p>
-            }
+            fallback={<p class="field-hint">This key has no packs yet</p>}
             when={packs().length > 0}
           >
-            {/* Rows sit flush like the browse dialog's: the separator is a
-                border-top between adjacent rows, so a gap here would leave the
-                hairline floating. */}
             <div>
+              <p class="mono-label">
+                Activated · {packs().length} pack
+                {packs().length === 1 ? '' : 's'}
+              </p>
+              {/* Rows sit flush like the browse dialog's: the separator is a
+                  border-top between adjacent rows, so a gap here would leave the
+                  hairline floating. */}
               <For each={packs()}>
                 {(packId) => (
                   <div class="sound-download-row">
@@ -1174,14 +1562,14 @@ function LicenseSetting(props: {
                       {packLabel(packId)}
                     </span>
                     <button
-                      class={`${isInstalled(packId) ? 'secondary-button' : 'primary-button'} sound-download-action`}
+                      class="secondary-button sound-download-action"
                       disabled={downloadingPack() !== null}
                       type="button"
                       onClick={() => download(packId)}
                     >
                       <Show
                         fallback={
-                          isInstalled(packId) ? 'Redownload' : 'Download'
+                          isInstalled(packId) ? 'Download again' : 'Download'
                         }
                         when={downloadingPack() === packId}
                       >
@@ -1199,45 +1587,25 @@ function LicenseSetting(props: {
   );
 }
 
-function SettingRow(props: { label: string; children: JSX.Element }) {
+function UpdateStrip(props: { notify: Notify; onDismiss: () => void }) {
   return (
-    <div class="grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 py-2">
-      <span class="mono-label">{props.label}</span>
-      <div class="min-w-0">{props.children}</div>
-    </div>
-  );
-}
-
-function ProjectUpdateCard(props: { notify: Notify; onDismiss: () => void }) {
-  return (
-    <section class="project-update">
-      <div class="min-w-0">
-        <p class="project-update-kicker">v{APP_VERSION}</p>
-        <h3 class="project-update-title">New sound catalog</h3>
-        <p class="project-update-copy">
-          A growing catalog of carefully crafted packs, free and paid. Preview
-          any of them in your browser, then unlock the ones you like with a
-          license key.
-        </p>
-      </div>
-
-      <div class="project-update-actions">
-        <button
-          class="primary-button project-update-button"
-          type="button"
-          onClick={() => void startBuyFlow(props.notify)}
-        >
-          Browse packs
-        </button>
-      </div>
-
+    <section class="update-strip">
+      <span class="mono-label mono-red">v{APP_VERSION}</span>
+      <span class="update-strip-title">{UPDATE_TITLE}</span>
+      <button
+        class="link-button"
+        type="button"
+        onClick={() => void startSoundTestFlow(props.notify)}
+      >
+        What's new
+      </button>
       <button
         aria-label="Hide update"
-        class="icon-button"
+        class="icon-button ml-auto"
         type="button"
         onClick={props.onDismiss}
       >
-        <span aria-hidden="true" class="close-icon" />
+        <Icon name="x" />
       </button>
     </section>
   );
@@ -1245,9 +1613,81 @@ function ProjectUpdateCard(props: { notify: Notify; onDismiss: () => void }) {
 
 export default function App() {
   const notifier = createNotifier();
-  const [soundsVersion, setSoundsVersion] = createSignal(0);
-  // Paid-only: keep the license box out of free users' way behind a toggle.
+  const notify = notifier.notify;
   const [licenseOpen, setLicenseOpen] = createSignal(false);
+  const openLicense = () => setLicenseOpen(true);
+  const [browseOpen, setBrowseOpen] = createSignal(false);
+  const [updateVisible, setUpdateVisible] = createSignal(!hasDismissedUpdate());
+
+  const [sounds, soundControls] = createResource(loadSounds);
+  const [selectedSound, selectedSoundControls] =
+    createResource(loadSelectedSound);
+  const [volume, setVolume] = createSignal(100);
+  const [played, setPlayed] = createSignal<KeyPlayed | null>(null);
+  const [preparing, setPreparing] = createSignal(false);
+
+  const refreshSounds = () => {
+    void soundControls.refetch();
+    void selectedSoundControls.refetch();
+  };
+
+  const soundList = createMemo(() => sounds() ?? []);
+  const hasSounds = () => soundList().length > 0;
+  const currentPack = () =>
+    soundList().find((sound) => sound.value === selectedSound());
+
+  const status = (): StatusModel => {
+    if (sounds.loading) {
+      return { tone: 'none', name: 'Loading packs' };
+    }
+    if (sounds.error) {
+      return {
+        tone: 'none',
+        name: "Pack list didn't load",
+        retry: () => void soundControls.refetch(),
+      };
+    }
+    if (!hasSounds()) {
+      return { tone: 'none', name: 'No packs yet' };
+    }
+    const pack = currentPack();
+    if (!pack) {
+      return { tone: 'none', name: 'Pick a pack to start' };
+    }
+    if (volume() === 0) {
+      return { tone: 'muted', name: pack.label, detail: 'Muted · volume 0' };
+    }
+    const last = played();
+    return {
+      tone: 'ready',
+      name: pack.label,
+      detail: last ? `Ready · last key ${keyLabel(last.key)}` : 'Ready',
+      level: last?.level ?? 0,
+    };
+  };
+
+  const handleSelect = async (value: string) => {
+    if (!value) {
+      return;
+    }
+    selectedSoundControls.mutate(value);
+
+    // Selecting decodes the whole pack in Rust, which takes a moment — without
+    // this the panel looks idle and the audition seems to fire late.
+    setPreparing(true);
+    try {
+      const result = await commands.selectSound(value);
+      if (result.status === 'error') {
+        notify("That pack didn't load. Download it again.", { tone: 'error' });
+      } else {
+        void commands.previewPackSound(); // hear what you picked
+      }
+    } finally {
+      setPreparing(false);
+    }
+
+    await selectedSoundControls.refetch();
+  };
 
   // Deep-link activation lives here, not in LicenseSetting: that component only
   // mounts while the License dialog is open, so a keyecho://activate link
@@ -1260,43 +1700,36 @@ export default function App() {
         if (!trimmed) {
           return;
         }
-        const refresh = () => setSoundsVersion((value) => value + 1);
-        void activateLicense(trimmed, notifier.notify, refresh)
+        void activateLicense(trimmed, notify, refreshSounds)
           .then(async ({ entitled }) => {
-            refresh();
-            // You just bought this and clicked "Open in KeyEcho" — arm it rather
-            // than making you hunt for it. On a bundle this is the pack you
-            // picked first, which beats leaving nothing selected.
+            refreshSounds();
+            // You just bought this and came back — arm it rather than making
+            // you hunt for it. On a bundle this is the pack you picked first.
             const first = entitled[0];
             if (first && (await selectPackById(first))) {
-              refresh();
+              refreshSounds();
+            }
+            if (entitled.length === 1 && first) {
+              notify(`${packLabel(first)} is ready. Type to hear it.`);
+            } else if (entitled.length > 1) {
+              notify('All packs unlocked. Type to hear them.');
             }
           })
           .catch((error: unknown) => {
-            notifier.notify(
-              `Could not activate that key. Reason: ${error}`,
-              'error',
-            );
+            notify("Couldn't activate. Paste your key in License.", {
+              tone: 'error',
+              details: String(error),
+            });
           });
       },
       { defer: true },
     ),
   );
-  const [projectUpdateVisible, setProjectUpdateVisible] = createSignal(
-    !hasDismissedProjectUpdate(),
-  );
 
-  const showProjectUpdate = () => {
-    forgetProjectUpdateDismissed();
-    setProjectUpdateVisible(true);
-  };
-
-  const dismissProjectUpdate = () => {
-    rememberProjectUpdateDismissed();
-    setProjectUpdateVisible(false);
-  };
-
-  onMount(() => void initDeepLinks(notifier.notify));
+  onMount(() => {
+    void initDeepLinks(notify);
+    void onKeyPlayed(setPlayed).then((unlisten) => onCleanup(unlisten));
+  });
 
   return (
     <>
@@ -1307,67 +1740,122 @@ export default function App() {
             <h1 class="text-[0.9375rem] font-semibold tracking-tight">
               KeyEcho
             </h1>
-            {/* License stays rightmost so it never shifts when What's New
-                appears or is dismissed. */}
             <div class="ml-auto flex items-center gap-2">
-              <Show when={!projectUpdateVisible()}>
-                <button
-                  class="secondary-button whats-new-button"
-                  type="button"
-                  onClick={showProjectUpdate}
-                >
-                  What's New
-                </button>
-              </Show>
               <button
                 class="secondary-button whats-new-button"
                 type="button"
-                onClick={() => setLicenseOpen(true)}
+                onClick={openLicense}
               >
                 License
               </button>
             </div>
           </header>
 
-          <div class="px-5 py-3">
-            <SoundSetting
-              notify={notifier.notify}
-              reloadSignal={soundsVersion}
-            />
+          <StatusBar status={status()} />
+
+          <div class="px-5 py-5">
+            <p class="mono-label mono-red pack-label">Sound pack</p>
+            <div class="pack-picker">
+              <Show
+                fallback={
+                  <div class="ui-field pack-empty-field w-full">
+                    Choose a pack
+                  </div>
+                }
+                when={hasSounds()}
+              >
+                <SelectMenu
+                  label="Sound pack"
+                  placeholder="Choose a pack"
+                  disabled={sounds.loading || preparing()}
+                  options={soundList()}
+                  preparing={preparing()}
+                  value={selectedSound() ?? undefined}
+                  onSelect={(value) => void handleSelect(value)}
+                />
+              </Show>
+              <button
+                class={`${hasSounds() ? 'secondary-button' : 'primary-button'} shrink-0`}
+                disabled={sounds.loading}
+                type="button"
+                onClick={() => setBrowseOpen(true)}
+              >
+                Browse packs
+              </button>
+            </div>
+            <Show when={!hasSounds() && catalogCounts()}>
+              {(counts) => (
+                <p class="field-hint pack-hint">
+                  {counts().free} packs are free. Pick one and start typing.
+                </p>
+              )}
+            </Show>
           </div>
 
           <div class="divide-y divide-border border-t border-border px-5">
-            <SettingRow label="Auto Launch">
-              <AutoLaunchSetting notify={notifier.notify} />
+            <SettingRow label="Auto launch">
+              <AutoLaunchSetting notify={notify} />
             </SettingRow>
 
             <SettingRow label="Volume">
-              <VolumeSetting notify={notifier.notify} />
+              <VolumeSetting
+                notify={notify}
+                volume={volume}
+                onVolume={setVolume}
+              />
             </SettingRow>
           </div>
 
-          <LicenseDialog
-            notify={notifier.notify}
-            open={licenseOpen()}
-            onClose={() => setLicenseOpen(false)}
-            onSoundsChanged={() => setSoundsVersion((value) => value + 1)}
+          <BrowseDialog
+            activeValue={selectedSound() ?? undefined}
+            installed={soundList()}
+            notify={notify}
+            open={browseOpen()}
+            openLicense={openLicense}
+            onClose={() => setBrowseOpen(false)}
+            onDownloaded={async () => {
+              await soundControls.refetch();
+            }}
+            onUse={(sound) => void handleSelect(sound.value)}
           />
 
-          <Show when={projectUpdateVisible()}>
-            <ProjectUpdateCard
-              notify={notifier.notify}
-              onDismiss={dismissProjectUpdate}
+          <LicenseDialog
+            notify={notify}
+            open={licenseOpen()}
+            onClose={() => setLicenseOpen(false)}
+            onSoundsChanged={refreshSounds}
+          />
+
+          <Show when={updateVisible()}>
+            <UpdateStrip
+              notify={notify}
+              onDismiss={() => {
+                rememberUpdateDismissed();
+                setUpdateVisible(false);
+              }}
             />
           </Show>
 
           <footer class="card-foot">
-            <span class="mono-label">Tauri + Rust · Under 5 MB · AGPL-3.0</span>
             <button
               class="mono-label card-foot-link"
               type="button"
-              onClick={() =>
-                openExternalUrl('https://keyecho.app', notifier.notify)
-              }
+              onClick={async () => {
+                const result = await commands.openSoundsFolder();
+                if (result.status === 'error') {
+                  notify("Sounds folder didn't open", {
+                    tone: 'error',
+                    details: result.error,
+                  });
+                }
+              }}
+            >
+              Sounds folder
+            </button>
+            <button
+              class="mono-label card-foot-link"
+              type="button"
+              onClick={() => openExternalUrl('https://keyecho.app', notify)}
             >
               keyecho.app
             </button>
