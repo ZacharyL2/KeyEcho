@@ -1,7 +1,7 @@
 use std::{
     num::NonZero,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
     thread,
@@ -17,7 +17,7 @@ use rodio::{
 
 use super::{
     listen_key::{Key, KeyEvent},
-    PlaybackSoundpack,
+    KeySound, PlaybackSoundpack,
 };
 
 // A natural-sounding spread of keys for the pack audition burst (letters of
@@ -184,9 +184,17 @@ impl AudioOutput {
     }
 }
 
+enum AudioCommand {
+    Key(KeyEvent),
+    // A sound outside the selected pack, e.g. a catalog preview.
+    Source(AudioSource),
+}
+
 #[derive(Clone)]
 pub struct SoundPlayer {
-    sender: Sender<KeyEvent>,
+    sender: Sender<AudioCommand>,
+    // Bumped by each audition so a newer one cuts the older burst short.
+    audition: Arc<AtomicU64>,
 }
 
 impl SoundPlayer {
@@ -195,17 +203,23 @@ impl SoundPlayer {
 
         thread::spawn(move || Self::handle_audio_thread(receiver, playback).ok());
 
-        Self { sender }
+        Self {
+            sender,
+            audition: Arc::new(AtomicU64::new(0)),
+        }
     }
 
     fn handle_audio_thread(
-        receiver: Receiver<KeyEvent>,
+        receiver: Receiver<AudioCommand>,
         playback: PlaybackSoundpack,
     ) -> Result<()> {
         let mut output = AudioOutput::open_default();
 
-        while let Ok(evt) = receiver.recv() {
-            let Some((source, volume)) = playback.source_for_event(evt) else {
+        while let Ok(command) = receiver.recv() {
+            let Some((source, volume)) = (match command {
+                AudioCommand::Key(evt) => playback.source_for_event(evt),
+                AudioCommand::Source(source) => Some((source, playback.volume())),
+            }) else {
                 continue;
             };
 
@@ -227,30 +241,51 @@ impl SoundPlayer {
     }
 
     pub fn try_play(&self, evt: KeyEvent) {
-        let _ = self.sender.try_send(evt);
+        let _ = self.sender.try_send(AudioCommand::Key(evt));
     }
 
     // Audition the current pack: fire a short burst of random key presses through
     // the real sink so selecting a pack reminds you how it sounds (Klack-style).
     // Non-blocking — a worker paces the burst and exits.
     pub fn play_sample(&self, count: usize) {
+        self.audition(count, AudioCommand::Key);
+    }
+
+    // Audition a pack that isn't selected (a catalog preview) through the same sink.
+    pub fn play_sound_sample(&self, sound: Arc<KeySound>, count: usize) {
+        self.audition(count, move |evt| match sound.event_source(evt) {
+            Some(source) => AudioCommand::Source(source),
+            None => AudioCommand::Key(KeyEvent::Reset),
+        });
+    }
+
+    fn audition<F>(&self, count: usize, command: F)
+    where
+        F: Fn(KeyEvent) -> AudioCommand + Send + 'static,
+    {
         let sender = self.sender.clone();
+        let audition = Arc::clone(&self.audition);
+        let generation = audition.fetch_add(1, Ordering::AcqRel) + 1;
+        let current = move || audition.load(Ordering::Acquire) == generation;
         thread::spawn(move || {
             let mut seed = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_nanos() as u64)
                 .unwrap_or(0x9E37_79B9_7F4A_7C15)
                 | 1; // never zero — xorshift would stick at 0
-                     // Same cadence as the web preview (src/preview.ts): 70–110ms hold,
+                     // Same cadence as the site's web preview: 70–110ms hold,
                      // 190–330ms press-to-press. Slower than real typing on purpose —
                      // the ear needs the strokes separated to judge timbre rather than
                      // hear one rattle.
             for _ in 0..count {
+                if !current() {
+                    return;
+                }
                 let key = SAMPLE_KEYS[(next_rand(&mut seed) as usize) % SAMPLE_KEYS.len()];
-                let _ = sender.try_send(KeyEvent::KeyPress(key));
+                let _ = sender.try_send(command(KeyEvent::KeyPress(key)));
                 let hold = 70 + next_rand(&mut seed) % 41;
                 thread::sleep(Duration::from_millis(hold));
-                let _ = sender.try_send(KeyEvent::KeyRelease(key));
+                let _ = sender.try_send(command(KeyEvent::KeyRelease(key)));
                 // press-to-press = hold + this, so 190–330ms overall.
                 thread::sleep(Duration::from_millis(120 + next_rand(&mut seed) % 101));
             }

@@ -24,20 +24,14 @@ local, fast, and easy to audit.
 
 ## Sound Packs
 
-KeyEcho itself stays free and open source. Paid premium sound packs are planned
-as optional content that funds recording, tuning, and maintenance.
+KeyEcho itself stays free and open source. Optional Crafted Packs are one-time
+purchases. They are not a subscription, and they are not required to use the
+app.
 
-The current founding bundle is a one-time $9.99 early-supporter offer:
-
-- Includes the first batch of studio-recorded premium packs.
-- Includes any extra premium packs released during the founding period.
-- Gives founder vote priority for the next pack queue.
-- Is not a subscription.
-- Is not required to keep using KeyEcho.
-- Is not a lifetime pass for every future sound pack.
-
-You can vote for the next packs or back the founding bundle on
-[keyecho.app](https://keyecho.app).
+Crafted Packs are $3.99 each. All Sounds Forever is $9.99 once and includes
+every current and future official Crafted Pack. Browse and try them at
+[keyecho.app/packs](https://keyecho.app/packs). Free packs download into the
+app; paid packs unlock with a license key.
 
 Want to create your own? See the [custom sounds guide](docs/guides/custom-sounds.md)
 for recording, processing, and adding your own sound packs to KeyEcho.
