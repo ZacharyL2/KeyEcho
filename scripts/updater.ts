@@ -61,6 +61,40 @@ export function createUpdateManifest(
   };
 }
 
+const UPDATES_URL = 'https://keyecho.app/updates';
+const PROMPT_NOTE_LINES = 3;
+const PROMPT_NOTE_CHARS = 90;
+
+/**
+ * Notes for the updater manifest. Installed apps show them in a native dialog
+ * that cannot scroll, so keep a few plain-text highlights and link the rest.
+ */
+export function promptNotes(notes: string): string {
+  const lines = notes
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'));
+  const bullets = lines.filter((line) => /^[-*] /.test(line));
+  const highlights = (bullets.length > 0 ? bullets : lines)
+    .slice(0, PROMPT_NOTE_LINES)
+    .map((line) => {
+      const text = line
+        .replace(/^[-*] /, '')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .trim();
+      const chars = [...text];
+      return chars.length > PROMPT_NOTE_CHARS
+        ? `- ${chars
+            .slice(0, PROMPT_NOTE_CHARS - 1)
+            .join('')
+            .trimEnd()}…`
+        : `- ${text}`;
+    });
+  return [...highlights, '', `See all changes at ${UPDATES_URL}`]
+    .join('\n')
+    .trim();
+}
+
 function resolveUpdateLog(tag: string) {
   const cwd = process.cwd();
   const filePath = path.join(cwd, CHANGELOG);
@@ -211,7 +245,7 @@ async function resolveUpdater() {
 
   const updateData = createUpdateManifest(
     latestRelease.tag_name,
-    resolveUpdateLog(latestRelease.tag_name),
+    promptNotes(resolveUpdateLog(latestRelease.tag_name)),
   );
 
   const promises = latestRelease.assets.map(async (asset) => {

@@ -35,7 +35,6 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-simple-import-sort": "^13.0.0",
     "lint-staged": "^17.0.8",
-    "playwright": "1.62.1",
     "prettier": "^3.8.4",
     "simple-git-hooks": "^2.13.1",
     "tsx": "^4.22.4",

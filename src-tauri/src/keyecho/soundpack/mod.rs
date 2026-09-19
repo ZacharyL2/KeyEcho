@@ -128,7 +128,7 @@ fn default_volume() -> f32 {
 
 fn meter_step(volume: f32) -> u8 {
     match volume {
-        v if !(v > 0.0) => 0,
+        v if v.is_nan() || v <= 0.0 => 0,
         v if v < 0.34 => 1,
         v if v < 0.67 => 2,
         _ => 3,
