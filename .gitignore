@@ -36,3 +36,4 @@ target
 
 # Playwright MCP scratch output (screenshots/traces) — local only.
 .playwright-mcp/
+.screenshots/
