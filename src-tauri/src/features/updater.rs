@@ -67,15 +67,78 @@ async fn install_update(update: &Update) -> anyhow::Result<()> {
     Ok(())
 }
 
+// The native dialog can't scroll, so long notes would push its buttons off screen.
+const PROMPT_NOTE_LINES: usize = 4;
+const PROMPT_NOTE_CHARS: usize = 100;
+const UPDATES_URL: &str = "https://keyecho.app/updates";
+
 fn update_prompt_message(version: &str, current_version: &str, release_notes: &str) -> String {
     let mut message = format!(
         "KeyEcho {version} is now available. You have {current_version}.\n\nWould you like to install it now?"
     );
 
-    if !release_notes.is_empty() {
-        message.push_str("\n\nRelease Notes:\n");
-        message.push_str(release_notes);
+    let highlights = release_highlights(release_notes);
+    if !highlights.is_empty() {
+        message.push_str("\n\nWhat's new:\n");
+        message.push_str(&highlights.join("\n"));
+        message.push_str(&format!("\n\nSee all changes at {UPDATES_URL}"));
     }
 
     message
+}
+
+fn release_highlights(release_notes: &str) -> Vec<String> {
+    let lines: Vec<&str> = release_notes
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+    let bullets: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| line.starts_with("- ") || line.starts_with("* "))
+        .collect();
+    let picked = if bullets.is_empty() { lines } else { bullets };
+
+    picked
+        .into_iter()
+        .take(PROMPT_NOTE_LINES)
+        .map(|line| {
+            let text = line.trim_start_matches(['-', '*']).trim();
+            if text.chars().count() > PROMPT_NOTE_CHARS {
+                let cut: String = text.chars().take(PROMPT_NOTE_CHARS - 1).collect();
+                format!("• {}…", cut.trim_end())
+            } else {
+                format!("• {text}")
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::update_prompt_message;
+
+    #[test]
+    fn prompt_keeps_four_short_bullets_and_links_the_rest() {
+        let notes = "## v9\n\n### Features\n\n- one\n- two\n- three\n- four\n- five\n\n### Security\n\n- six";
+        let message = update_prompt_message("9.0.0", "8.0.0", notes);
+        assert!(message.contains("Would you like to install it now?"));
+        assert!(message.contains("• four"));
+        assert!(!message.contains("five"));
+        assert!(message.ends_with("See all changes at https://keyecho.app/updates"));
+    }
+
+    #[test]
+    fn prompt_shortens_long_bullets() {
+        let notes = format!("- {}", "a".repeat(300));
+        let message = update_prompt_message("9.0.0", "8.0.0", &notes);
+        assert!(message.contains(&format!("• {}…", "a".repeat(99))));
+    }
+
+    #[test]
+    fn prompt_without_notes_is_just_the_question() {
+        let message = update_prompt_message("9.0.0", "8.0.0", "");
+        assert!(message.ends_with("Would you like to install it now?"));
+    }
 }

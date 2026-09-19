@@ -30,7 +30,7 @@ describe('commands', () => {
     invokeMock.mockResolvedValueOnce(null);
 
     await expect(
-      commands.downloadSound('https://example.com/sound.tar'),
+      commands.downloadSound('https://example.com/sound.tar', 'KE1.secret'),
     ).resolves.toEqual({
       status: 'ok',
       data: null,
@@ -38,6 +38,7 @@ describe('commands', () => {
 
     expect(invokeMock).toHaveBeenCalledWith('download_sound', {
       url: 'https://example.com/sound.tar',
+      licenseKey: 'KE1.secret',
     });
   });
 
