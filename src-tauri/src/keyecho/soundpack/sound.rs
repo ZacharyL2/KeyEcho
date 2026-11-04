@@ -276,6 +276,7 @@ impl KeySound {
             };
             event_sources.insert(event, source);
         }
+        anyhow::ensure!(!event_sources.is_empty(), "soundpack has no key sounds");
 
         Ok(Self {
             name,
