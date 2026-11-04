@@ -38,6 +38,7 @@ import type { Notify, Toast } from './notify';
 import { KEYECHO_ORIGIN } from './origin';
 import type { KeyPlayed } from './playback';
 import { keyLabel, onKeyPlayed } from './playback';
+import { requestRestoreEmail } from './restore';
 import type { CommandResult, SoundOption } from './services/bindings';
 import { commands } from './services/bindings';
 
@@ -51,7 +52,6 @@ const UPDATE_DISMISSED_KEY = `keyecho:v${APP_VERSION}:update-dismissed`;
 const LICENSE_KEY_STORAGE = 'keyecho:license-key';
 const ENTITLEMENTS_URL = `${KEYECHO_ORIGIN}/packs/entitlements`;
 const PACK_DOWNLOAD_URL = `${KEYECHO_ORIGIN}/packs/download`;
-const RESTORE_URL = `${KEYECHO_ORIGIN}/packs/restore`;
 
 const PREVIEW_BURST_MS = 1200;
 // Same names and order as the site's catalog filter.
@@ -1394,8 +1394,8 @@ function LicenseSetting(props: {
   };
 
   // Restore-by-email: the endpoint never reveals whether the address had
-  // purchases, so any completed request shows the same confirmation; only a
-  // network failure is surfaced as an error.
+  // purchases, so every accepted request shows the same confirmation; network
+  // and server failures are surfaced as an error.
   const restore = async () => {
     const email = restoreEmail().trim();
     if (!email) {
@@ -1403,11 +1403,8 @@ function LicenseSetting(props: {
     }
     setRestoring(true);
     try {
-      await fetch(RESTORE_URL, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
+      setRestoreSent(false);
+      await requestRestoreEmail(email);
       setRestoreSent(true);
     } catch (error) {
       props.notify("Can't reach keyecho.app right now", {
