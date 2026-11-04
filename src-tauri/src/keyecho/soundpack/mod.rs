@@ -62,7 +62,11 @@ impl SoundpackConfig {
             fs::create_dir_all(parent)?;
         }
 
-        fs::write(path, serde_json::to_vec_pretty(self)?)?;
+        // Write a sibling then rename over the config, so an interrupted save
+        // never leaves a truncated file that loads as defaults.
+        let temp_path = path.with_extension("json.tmp");
+        fs::write(&temp_path, serde_json::to_vec_pretty(self)?)?;
+        fs::rename(&temp_path, path)?;
         Ok(())
     }
 
