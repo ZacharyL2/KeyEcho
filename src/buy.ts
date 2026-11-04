@@ -5,7 +5,6 @@ import type { Notify } from './notify';
 import { KEYECHO_ORIGIN } from './origin';
 import { commands } from './services/bindings';
 
-const NONCE_STORAGE = 'keyecho:buy-nonce';
 const CATALOG_URL = `${KEYECHO_ORIGIN}/packs`;
 const SOUND_TEST_URL = `${KEYECHO_ORIGIN}/keyboard-sound-test`;
 const STATUS_URL = `${KEYECHO_ORIGIN}/packs/purchase-status`;
@@ -26,25 +25,19 @@ export function cancelPurchase() {
   setPendingPurchase(null);
 }
 
-// Stable per-machine nonce: threads app -> browser checkout -> purchase-status.
-function machineNonce(): string {
-  try {
-    const existing = localStorage.getItem(NONCE_STORAGE);
-    if (existing) {
-      return existing;
-    }
-  } catch {
-    // localStorage unavailable -> fall through to a fresh (non-persistent) nonce.
+// Fresh nonce per checkout: threads app -> browser checkout -> purchase-status.
+// A reused nonce would resolve to an earlier purchase's key; while a checkout is
+// still being polled, reopening the store keeps its nonce.
+let pollingNonce: string | null = null;
+
+function checkoutNonce(): string {
+  if (pendingPurchase() && pollingNonce) {
+    return pollingNonce;
   }
-  const nonce =
+  return (
     globalThis.crypto?.randomUUID?.() ??
-    `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  try {
-    localStorage.setItem(NONCE_STORAGE, nonce);
-  } catch {
-    // Non-persistent nonce still works for this session's poll.
-  }
-  return nonce;
+    `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  );
 }
 
 async function pollPurchase(
@@ -52,10 +45,12 @@ async function pollPurchase(
   notify: Notify,
   openLicense: () => void,
 ) {
+  // A poll left over from a cancelled checkout must not touch a newer one.
+  const isCurrent = () => pendingPurchase() !== null && pollingNonce === nonce;
   const deadline = Date.now() + POLL_MAX_MS;
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
-    if (!pendingPurchase()) {
+    if (!isCurrent()) {
       return; // cancelled from the dialog
     }
     let data: { key?: unknown; packs?: unknown } | null = null;
@@ -69,11 +64,17 @@ async function pollPurchase(
     } catch {
       // Transient network error while the user is still checking out; keep polling.
     }
+    if (!isCurrent()) {
+      return;
+    }
     if (data && typeof data.key === 'string' && data.key) {
       setPendingPurchase(null);
       pushActivationKey(data.key); // drives activation: entitlements + download
       return;
     }
+  }
+  if (!isCurrent()) {
+    return;
   }
   setPendingPurchase(null);
   notify('Still waiting · Paste your key', {
@@ -90,7 +91,7 @@ async function openStore(
   campaign: string,
   content?: string,
 ) {
-  const nonce = machineNonce();
+  const nonce = checkoutNonce();
   const url = new URL(target);
   url.searchParams.set('buy_nonce', nonce);
   url.searchParams.set('utm_source', 'keyecho_app');
@@ -109,6 +110,7 @@ async function openStore(
     return; // one checkout at a time
   }
   setPendingPurchase(purchase);
+  pollingNonce = nonce;
   void pollPurchase(nonce, notify, openLicense);
 }
 
