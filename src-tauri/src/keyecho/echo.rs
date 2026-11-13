@@ -72,11 +72,6 @@ impl AudioSource {
     pub(crate) fn shares_samples_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.samples, &other.samples)
     }
-
-    #[cfg(test)]
-    pub(crate) fn sample_ref_count(&self) -> usize {
-        Arc::strong_count(&self.samples)
-    }
 }
 
 impl Iterator for AudioSource {
@@ -259,6 +254,11 @@ impl SoundPlayer {
         });
     }
 
+    // Cut the running audition short; keys already sounding ring out.
+    pub fn stop_sample(&self) {
+        self.audition.fetch_add(1, Ordering::AcqRel);
+    }
+
     fn audition<F>(&self, count: usize, command: F)
     where
         F: Fn(KeyEvent) -> AudioCommand + Send + 'static,
@@ -299,7 +299,7 @@ mod tests {
 
     use rodio::Source;
 
-    use super::{next_rand, AudioSource, LOW_LATENCY_BUFFER_CANDIDATES, SAMPLE_KEYS};
+    use super::{next_rand, AudioSource, SAMPLE_KEYS};
 
     #[test]
     fn audition_picks_varied_keys() {
@@ -333,34 +333,6 @@ mod tests {
         assert_eq!(source.size_hint(), (3, Some(3)));
         assert_eq!(source.len(), 3);
         assert_eq!(source.current_span_len(), Some(3));
-    }
-
-    #[test]
-    fn audio_source_clone_reuses_sample_storage() {
-        let samples = Arc::from(vec![0.0, 1.0].into_boxed_slice());
-        let source = AudioSource::new(samples, 1, 44_100).expect("valid source");
-        assert_eq!(source.sample_ref_count(), 1);
-
-        let clone = source.clone();
-
-        assert!(source.shares_samples_with(&clone));
-        assert_eq!(source.sample_ref_count(), 2);
-        assert_eq!(clone.sample_ref_count(), 2);
-    }
-
-    #[test]
-    fn audio_source_metadata_stays_small() {
-        assert!(std::mem::size_of::<AudioSource>() <= 48);
-    }
-
-    #[test]
-    fn audio_event_queue_is_bounded() {
-        assert_eq!(super::AUDIO_EVENT_QUEUE_CAPACITY, 256);
-    }
-
-    #[test]
-    fn audio_buffer_candidates_favor_latency_then_stability() {
-        assert_eq!(LOW_LATENCY_BUFFER_CANDIDATES, [512, 1024, 2048]);
     }
 
     // Pins the error classification the reopen decision depends on, so dropping

@@ -71,6 +71,10 @@ export const commands = {
     return callCommand<null>('preview_catalog_pack', { id });
   },
 
+  stopPreview() {
+    return callCommand<null>('stop_preview');
+  },
+
   getVolume() {
     return callCommand<number>('get_volume');
   },

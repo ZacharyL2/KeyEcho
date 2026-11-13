@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 80,
+  "singleQuote": true,
+  "htmlWhitespaceSensitivity": "ignore",
+  "sortPackageJson": false,
+  "overrides": [
+    {
+      "files": ["wrangler.jsonc"],
+      "options": {
+        "trailingComma": "none"
+      }
+    }
+  ],
+  "ignorePatterns": [
+    "pnpm-lock.yaml",
+    ".output",
+    ".nitro",
+    ".tanstack",
+    ".vinxi",
+    ".wrangler",
+    "dist",
+    "coverage",
+    "drizzle",
+    "**/gen/**",
+    "**/*.gen.ts",
+    "**/*.generated.ts",
+    "**/fixtures/**",
+    "**/__fixtures__/**",
+    "**/*.html",
+    "design/**",
+    "**/*.typecheck.ts",
+    "worker-configuration.d.ts",
+    "bindings.ts",
+    "auto-imports.d.ts"
+  ]
+}

@@ -316,7 +316,62 @@ fn validate_tar_entry_type(entry_type: EntryType) -> Result<()> {
     Ok(())
 }
 
-fn unpack_sound_archive(dir: &Path, content: &[u8]) -> Result<()> {
+// Installs the archive's `name` pack into `dir`. It is unpacked into a staging
+// dir and must load as a pack before it replaces an installed one.
+fn unpack_sound_archive(dir: &Path, name: &str, content: &[u8]) -> Result<()> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let staging = dir.join(format!(".staging-{}-{nanos}", std::process::id()));
+    create_dir_all(&staging)?;
+    let result = unpack_into(&staging, content).and_then(|()| {
+        let staged_pack = staging.join(name);
+        validate_staged_pack(&staged_pack)?;
+        replace_pack(
+            &staged_pack,
+            &dir.join(name),
+            &staging.with_extension("old"),
+        )
+    });
+    let _ = std::fs::remove_dir_all(&staging);
+    result
+}
+
+fn validate_staged_pack(pack: &Path) -> Result<()> {
+    ensure!(
+        pack.is_dir(),
+        "sound archive does not contain the expected pack"
+    );
+    let pack = pack.to_str().context("invalid sound pack path")?;
+    KeySound::new(pack).context("sound archive does not contain a playable pack")?;
+    Ok(())
+}
+
+// The installed pack is moved aside, not deleted, until the new one is in place.
+fn replace_pack(staged: &Path, destination: &Path, backup: &Path) -> Result<()> {
+    let had_previous = destination.exists();
+    if had_previous {
+        std::fs::rename(destination, backup)?;
+    }
+    if let Err(error) = std::fs::rename(staged, destination) {
+        if had_previous {
+            std::fs::rename(backup, destination).with_context(|| {
+                format!(
+                    "failed to install the pack ({error}) and to restore the previous one from {}",
+                    backup.display()
+                )
+            })?;
+        }
+        return Err(error.into());
+    }
+    if had_previous {
+        let _ = std::fs::remove_dir_all(backup);
+    }
+    Ok(())
+}
+
+fn unpack_into(dir: &Path, content: &[u8]) -> Result<()> {
     let mut archive = tar::Archive::new(Cursor::new(content));
 
     for entry in archive.entries()? {
@@ -335,7 +390,7 @@ async fn download_sound_impl(dir: &Path, url: &str, license_key: Option<&str>) -
     let url = Url::parse(url).context("invalid sound download URL")?;
     let name = sound_name_from_url(&url);
     let content = fetch_sound_archive(&url, license_key).await?;
-    unpack_sound_archive(dir, &content)?;
+    unpack_sound_archive(dir, &name, &content)?;
 
     Ok(name)
 }
@@ -422,6 +477,12 @@ pub async fn preview_catalog_pack(
 
     player.play_sound_sample(sound, PREVIEW_BURST_KEYS);
     Ok(())
+}
+
+// Stop a catalog preview before its burst ends.
+#[tauri::command]
+pub fn stop_preview(player: State<SoundPlayer>) {
+    player.stop_sample();
 }
 
 // One client for the app, so back-to-back CDN fetches reuse a connection.
@@ -603,11 +664,12 @@ mod tests {
     #[test]
     fn safe_unpack_extracts_regular_files() {
         let target = temp_test_dir("keyecho-safe-unpack");
-        let archive = archive_with_file("pack/config.json", br#"{"keys":[]}"#);
+        let archive = playable_pack_archive("pack");
 
-        unpack_sound_archive(&target, &archive).expect("safe archive");
+        unpack_sound_archive(&target, "pack", &archive).expect("safe archive");
 
         assert!(target.join("pack").join("config.json").exists());
+        assert!(target.join("pack").join("sound.wav").exists());
         let _ = fs::remove_dir_all(target);
     }
 
@@ -616,7 +678,7 @@ mod tests {
         let target = temp_test_dir("keyecho-parent-unpack");
         let archive = archive_with_raw_file("../escape.txt", b"bad");
 
-        assert!(unpack_sound_archive(&target, &archive).is_err());
+        assert!(unpack_sound_archive(&target, "pack", &archive).is_err());
         assert!(!target.join("..").join("escape.txt").exists());
         let _ = fs::remove_dir_all(target);
     }
@@ -639,8 +701,136 @@ mod tests {
             builder.finish().expect("finish archive");
         }
 
-        assert!(unpack_sound_archive(&target, &bytes).is_err());
+        assert!(unpack_sound_archive(&target, "pack", &bytes).is_err());
         let _ = fs::remove_dir_all(target);
+    }
+
+    #[test]
+    fn failed_reinstall_keeps_the_installed_pack() {
+        let target = temp_test_dir("keyecho-failed-reinstall");
+        fs::create_dir_all(target.join("pack")).expect("installed pack dir");
+        fs::write(target.join("pack").join("config.json"), "installed").expect("installed config");
+        // A valid first entry, then one that fails validation mid-archive.
+        let mut archive = archive_with_raw_file("pack/config.json", b"partial");
+        archive.truncate(archive.len() - 1024); // drop the end-of-archive blocks
+        archive.extend(archive_with_raw_file("../escape.txt", b"bad"));
+
+        assert!(unpack_sound_archive(&target, "pack", &archive).is_err());
+        assert_eq!(
+            fs::read_to_string(target.join("pack").join("config.json")).expect("config remains"),
+            "installed"
+        );
+        let _ = fs::remove_dir_all(target);
+    }
+
+    #[test]
+    fn reinstall_of_an_unplayable_pack_keeps_the_installed_pack() {
+        let target = temp_test_dir("keyecho-unplayable-reinstall");
+        fs::create_dir_all(target.join("pack")).expect("installed pack dir");
+        fs::write(target.join("pack").join("config.json"), "installed").expect("installed config");
+        fs::write(target.join("pack").join("sound.wav"), "installed audio")
+            .expect("installed audio");
+        // Well-formed tar, but the pack has a config and no audio.
+        let archive = archive_with_file("pack/config.json", br#"{"defines":{}}"#);
+
+        assert!(unpack_sound_archive(&target, "pack", &archive).is_err());
+        assert_eq!(
+            fs::read_to_string(target.join("pack").join("config.json")).expect("config remains"),
+            "installed"
+        );
+        assert!(target.join("pack").join("sound.wav").exists());
+        let _ = fs::remove_dir_all(target);
+    }
+
+    #[test]
+    fn reinstall_replaces_the_installed_pack() {
+        let target = temp_test_dir("keyecho-reinstall");
+        fs::create_dir_all(target.join("pack")).expect("installed pack dir");
+        fs::write(target.join("pack").join("stale.ogg"), "old").expect("stale file");
+        let archive = playable_pack_archive("pack");
+
+        unpack_sound_archive(&target, "pack", &archive).expect("reinstall");
+
+        assert!(target.join("pack").join("sound.wav").exists());
+        assert!(!target.join("pack").join("stale.ogg").exists());
+        let left: Vec<_> = fs::read_dir(&target)
+            .expect("target")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert_eq!(left, ["pack"], "no staging or backup left behind");
+        let _ = fs::remove_dir_all(target);
+    }
+
+    #[test]
+    fn reinstall_of_a_pack_without_key_sounds_keeps_the_installed_pack() {
+        let target = temp_test_dir("keyecho-silent-reinstall");
+        fs::create_dir_all(target.join("pack")).expect("installed pack dir");
+        fs::write(target.join("pack").join("config.json"), "installed").expect("installed config");
+        fs::write(target.join("pack").join("sound.wav"), "installed audio")
+            .expect("installed audio");
+        // Valid audio, but no key press or release maps to it.
+        let archive = pack_archive("pack", serde_json::json!({}));
+
+        assert!(unpack_sound_archive(&target, "pack", &archive).is_err());
+        assert_eq!(
+            fs::read_to_string(target.join("pack").join("config.json")).expect("config remains"),
+            "installed"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("pack").join("sound.wav")).expect("audio remains"),
+            "installed audio"
+        );
+        let _ = fs::remove_dir_all(target);
+    }
+
+    fn playable_pack_archive(root: &str) -> Vec<u8> {
+        pack_archive(
+            root,
+            serde_json::json!({ "KeyA": [{ "startFrame": 0, "frameCount": 100 }] }),
+        )
+    }
+
+    // A minimal v2 pack: 400 frames of mono 16-bit audio and the given key defines.
+    fn pack_archive(root: &str, defines: serde_json::Value) -> Vec<u8> {
+        let frames = 400u32;
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + frames * 2).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+        wav.extend_from_slice(&48_000u32.to_le_bytes());
+        wav.extend_from_slice(&96_000u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(frames * 2).to_le_bytes());
+        wav.resize(wav.len() + (frames * 2) as usize, 0);
+        let config = serde_json::json!({
+            "schemaVersion": 2,
+            "audio": { "file": "sound.wav", "sampleRate": 48_000, "channels": 1, "frameCount": frames },
+            "defines": defines
+        });
+
+        let mut bytes = Vec::new();
+        {
+            let mut builder = Builder::new(&mut bytes);
+            for (name, content) in [
+                ("config.json", serde_json::to_vec(&config).expect("config")),
+                ("sound.wav", wav),
+            ] {
+                let mut header = Header::new_gnu();
+                header.set_size(content.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                builder
+                    .append_data(&mut header, format!("{root}/{name}"), Cursor::new(content))
+                    .expect("append file");
+            }
+            builder.finish().expect("finish archive");
+        }
+        bytes
     }
 
     fn archive_with_file(path: &str, content: &[u8]) -> Vec<u8> {

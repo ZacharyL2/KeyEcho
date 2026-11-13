@@ -1,0 +1,98 @@
+{
+  "generator": {
+    "version": 10,
+    "fonttools": "4.66.1"
+  },
+  "manifest": {
+    "sha256": "a29887ba4139692fb7924ac3b58b1fe8526a73f944614393f07c6c3f163502b3"
+  },
+  "source": {
+    "library": {
+      "name": "Hugeicons Free",
+      "grid": 24.0,
+      "stroke": 1.5
+    },
+    "styles": {
+      "stroke-rounded": {
+        "family": null
+      }
+    }
+  },
+  "icons": {
+    "back": {
+      "glyph": "arrow-left-01",
+      "style": "stroke-rounded",
+      "ink": [0.3437, 0.2187, 0.6563, 0.7813],
+      "centered": false,
+      "svg": {
+        "svg/stroke-rounded/arrow-left-01.svg": "48ee4018be1c23de8c64390bf4da710a7b9ac42c9a938909e013d2dc0b546d1d"
+      }
+    },
+    "check": {
+      "glyph": "tick-02",
+      "style": "stroke-rounded",
+      "ink": [0.1771, 0.2396, 0.8229, 0.7604],
+      "centered": false,
+      "svg": {
+        "svg/stroke-rounded/tick-02.svg": "07424a5745b5548515e023caf5ffa6334e61bc428f0cc187c085cd6f638a8791"
+      }
+    },
+    "close": {
+      "glyph": "cancel-01",
+      "style": "stroke-rounded",
+      "ink": [0.2187, 0.2188, 0.7812, 0.7812],
+      "centered": false,
+      "svg": {
+        "svg/stroke-rounded/cancel-01.svg": "9f8223a055a0eee1aa4073f2db1226eedfd00f3b24bcfa9f7f0e967d8f4c1c3e"
+      }
+    },
+    "expand": {
+      "glyph": "arrow-down-01",
+      "style": "stroke-rounded",
+      "ink": [0.2187, 0.3438, 0.7813, 0.6563],
+      "centered": false,
+      "svg": {
+        "svg/stroke-rounded/arrow-down-01.svg": "8844255fecd0ca97e177af4c4b687f153370161bc9e96a29b8fcc2f8c3c77b94"
+      }
+    },
+    "loading": {
+      "glyph": "loading-03",
+      "style": "stroke-rounded",
+      "ink": [0.0938, 0.0938, 0.9062, 0.9062],
+      "centered": false,
+      "svg": {
+        "svg/stroke-rounded/loading-03.svg": "e90e22e3563cbe9806bf102235464607e0496adf8eeaff48ce2cb96610291a34"
+      }
+    },
+    "play": {
+      "glyph": "play",
+      "style": "stroke-rounded",
+      "ink": [0.1771, 0.1582, 0.823, 0.8418],
+      "centered": false,
+      "svg": {
+        "svg/stroke-rounded/play.svg": "3ca39f6229f58a210364cf360f85dcff29cc22251484b26c8226f16cc45e518c"
+      }
+    },
+    "search": {
+      "glyph": "search-01",
+      "style": "stroke-rounded",
+      "ink": [0.0937, 0.0938, 0.9062, 0.9063],
+      "centered": false,
+      "svg": {
+        "svg/stroke-rounded/search-01.svg": "1903afb17355be4f5bf74318a81b0f155e5d6a73e7aae32b4862fa3ae5f898a0"
+      }
+    },
+    "stop": {
+      "glyph": "stop",
+      "style": "stroke-rounded",
+      "ink": [0.1354, 0.1354, 0.8646, 0.8646],
+      "centered": false,
+      "svg": {
+        "svg/stroke-rounded/stop.svg": "a2c09ee6cccd9c8e8fdae34497e953e8b16a16b63f13e721277a601f520cf5ab"
+      }
+    }
+  },
+  "outputs": {
+    "src/icons.gen.ts": "65e0688aa1ccc7de4892ccddd46b5b37d74abfb24dbc5e98cbaa5417b45c107b"
+  }
+}

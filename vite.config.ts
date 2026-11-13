@@ -1,11 +1,11 @@
 import path from 'node:path';
 
-import UnoCSS from 'unocss/vite';
+import { vanillaExtractPlugin } from '@vanilla-extract/vite-plugin';
 import { defineConfig } from 'vite';
 import Solid from 'vite-plugin-solid';
 
 export default defineConfig(() => ({
-  plugins: [Solid(), UnoCSS()],
+  plugins: [vanillaExtractPlugin(), Solid()],
 
   resolve: {
     alias: {

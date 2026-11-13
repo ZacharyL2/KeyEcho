@@ -1,8 +1,5 @@
 use std::{collections::HashSet, thread};
 
-use serde::Serialize;
-use tauri::{AppHandle, Emitter};
-
 mod echo;
 mod listen_key;
 mod soundpack;
@@ -11,17 +8,6 @@ pub(super) use echo::AudioSource;
 pub(crate) use echo::SoundPlayer;
 pub(super) use listen_key::{Key, KeyEvent};
 pub(crate) use soundpack::{KeySound, KeySoundpack, PlaybackSoundpack, SoundOption};
-
-pub const KEY_PLAYED_EVENT: &str = "key-played";
-
-/// What the status bar is allowed to know about a keystroke: which key it was
-/// and how loud the sound came out. Nothing is stored, and keyboard events
-/// still only trigger the selected sound.
-#[derive(Clone, Serialize)]
-struct KeyPlayed<'a> {
-    key: &'a str,
-    level: u8,
-}
 
 #[derive(Default)]
 struct KeyPressGate {
@@ -46,8 +32,7 @@ impl KeyPressGate {
 // Start the key listener and return a player handle. The listener blocks, so it
 // runs on its own thread; the returned handle lets the UI audition packs (play a
 // sample burst) through the same sink.
-pub fn run_keyecho(playback: PlaybackSoundpack, app: AppHandle) -> SoundPlayer {
-    let meter = playback.clone();
+pub fn run_keyecho(playback: PlaybackSoundpack) -> SoundPlayer {
     let player = echo::SoundPlayer::new(playback);
     let listen_player = player.clone();
 
@@ -56,15 +41,6 @@ pub fn run_keyecho(playback: PlaybackSoundpack, app: AppHandle) -> SoundPlayer {
         if let Err(err) = listen_key::listen(move |evt| {
             if let Some(evt) = gate.event_to_play(evt) {
                 listen_player.try_play(evt);
-                if let KeyEvent::KeyPress(key) = evt {
-                    let _ = app.emit(
-                        KEY_PLAYED_EVENT,
-                        KeyPlayed {
-                            key: key.as_ref(),
-                            level: meter.meter_level(),
-                        },
-                    );
-                }
             }
         }) {
             eprintln!("keyecho listener stopped: {err:?}");

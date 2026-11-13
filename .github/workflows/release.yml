@@ -49,8 +49,10 @@ jobs:
             pkg-config \
             wget
 
-      - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1 # keep in step with rust-toolchain.toml
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
@@ -84,8 +86,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v7
 
-      - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1 # keep in step with rust-toolchain.toml
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
@@ -149,8 +153,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v7
 
-      - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1 # keep in step with rust-toolchain.toml
 
       - name: Add Rust Target
         run: rustup target add ${{ matrix.target }}
@@ -505,10 +511,11 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      - name: Install Rust Stable
+      - name: Install Rust
         if: matrix.buildMode == 'native'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.99.1 # keep in step with rust-toolchain.toml
           targets: ${{ matrix.target }}
 
       - name: Rust Cache

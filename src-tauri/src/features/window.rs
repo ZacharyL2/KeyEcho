@@ -28,6 +28,9 @@ pub fn show_dashboard(app_handle: &AppHandle) -> Result<()> {
     .title("KeyEcho")
     .resizable(true)
     .min_inner_size(620.0, 480.0)
+    // A cap keeps the sleeve composed; AppKit then makes the green button zoom
+    // to this size instead of full screen.
+    .max_inner_size(880.0, 760.0)
     .inner_size(720.0, 640.0)
     .build()?;
 

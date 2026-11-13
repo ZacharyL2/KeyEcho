@@ -1,24 +1,28 @@
 [package]
 name = "keyecho"
 edition = "2021"
-version = "1.1.1"
+version = "1.2.0"
 authors = ["Zachary"]
 description = "KeyEcho"
 
 [build-dependencies]
-tauri-build = { version = "2.6.3", features = [] }
+tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
-tauri = { version = "2.11.3", features = ["tray-icon", "image-ico", "image-png"] }
-tauri-plugin-autostart = "2.5.1"
-tauri-plugin-single-instance = "2.4.2"
-tauri-plugin-updater = "2.10.1"
+tauri = { version = "2.12.5", features = [
+  "tray-icon",
+  "image-ico",
+  "image-png",
+] }
+tauri-plugin-autostart = "2.7.0"
+tauri-plugin-single-instance = "2.5.5"
+tauri-plugin-updater = "2.14.1"
 
 tar = "0.4.46"
-anyhow = "1.0.102"
+anyhow = "1.0.104"
 thiserror = "2.0.18"
 serde_json = "1.0.150"
-serde = { version = "1.0.228", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
 strum = { version = "0.28.0", features = ["derive"] }
 reqwest = { version = "0.13.4", default-features = false, features = [
   "stream",
@@ -30,7 +34,9 @@ reqwest = { version = "0.13.4", default-features = false, features = [
 # rodio pulls cpal 0.17, which drops this — a silent downgrade visible only in
 # Cargo.lock and covered by no test, so don't swap it. Recovery: is_stream_lost
 # in src/keyecho/echo.rs.
-rodio = { git = "https://github.com/RustAudio/rodio.git", rev = "ee3c21f2f3d926110706a2780658d098831c1ed9", default-features = false, features = ["playback"] }
+rodio = { git = "https://github.com/RustAudio/rodio.git", rev = "ee3c21f2f3d926110706a2780658d098831c1ed9", default-features = false, features = [
+  "playback",
+] }
 rubato = "4.0.0"
 symphonia = { version = "0.6.0", default-features = false, features = [
   "flac",
@@ -41,9 +47,9 @@ symphonia = { version = "0.6.0", default-features = false, features = [
 ] }
 arc-swap = "1.9.1"
 crossbeam-channel = "0.5.15"
-tauri-plugin-dialog = "2.7.1"
-tauri-plugin-opener = "2.5.4"
-tauri-plugin-deep-link = "2.4.9"
+tauri-plugin-dialog = "2.8.4"
+tauri-plugin-opener = "2.7.3"
+tauri-plugin-deep-link = "2.6.3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winapi = { version = "0.3.9", features = [
@@ -54,8 +60,17 @@ winapi = { version = "0.3.9", features = [
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = { version = "0.25.0", features = ["highsierra"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSProcessInfo", "NSString", "NSURL"] }
-objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+  "NSProcessInfo",
+  "NSString",
+  "NSURL",
+] }
+objc2-service-management = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "SMAppService",
+  "objc2",
+  "objc2-foundation",
+] }
 plist = "1.9.0"
 tempfile = "3.27.0"
 
