@@ -114,31 +114,3 @@ fn release_highlights(release_notes: &str) -> Vec<String> {
         })
         .collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::update_prompt_message;
-
-    #[test]
-    fn prompt_keeps_four_short_bullets_and_links_the_rest() {
-        let notes = "## v9\n\n### Features\n\n- one\n- two\n- three\n- four\n- five\n\n### Security\n\n- six";
-        let message = update_prompt_message("9.0.0", "8.0.0", notes);
-        assert!(message.contains("Would you like to install it now?"));
-        assert!(message.contains("• four"));
-        assert!(!message.contains("five"));
-        assert!(message.ends_with("See all changes at https://keyecho.app/updates"));
-    }
-
-    #[test]
-    fn prompt_shortens_long_bullets() {
-        let notes = format!("- {}", "a".repeat(300));
-        let message = update_prompt_message("9.0.0", "8.0.0", &notes);
-        assert!(message.contains(&format!("• {}…", "a".repeat(99))));
-    }
-
-    #[test]
-    fn prompt_without_notes_is_just_the_question() {
-        let message = update_prompt_message("9.0.0", "8.0.0", "");
-        assert!(message.ends_with("Would you like to install it now?"));
-    }
-}

@@ -19,3 +19,11 @@ export interface Toast extends NotifyOptions {
   id: string;
   message: string;
 }
+
+/**
+ * The list after `toast` arrives. A repeat of a message still on screen
+ * replaces it, so failing the same thing again does not stack another toast.
+ */
+export function withToast(toasts: readonly Toast[], toast: Toast): Toast[] {
+  return [...toasts.filter((item) => item.message !== toast.message), toast];
+}

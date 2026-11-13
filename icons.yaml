@@ -1,0 +1,16 @@
+# Interface icons: Hugeicons Free (MIT, see src/icons.LICENSE.md).
+# src/icons.gen.ts is generated from this file; do not edit it by hand.
+library: free
+target: solid
+style: stroke-rounded
+ts: src/icons.gen.ts
+typeImport: ./glyph
+icons:
+  back:
+  check:
+  close:
+  expand:
+  loading:
+  play: { glyph: play }
+  search:
+  stop: { glyph: stop }

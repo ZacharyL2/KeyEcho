@@ -10,8 +10,8 @@ mod setup;
 
 use commands::{
     download_sound, exit_app, get_selected_sound, get_sounds, get_volume, open_external_url,
-    open_sounds_folder, preview_catalog_pack, preview_pack_sound, select_sound, update_volume,
-    PreviewCache,
+    open_sounds_folder, preview_catalog_pack, preview_pack_sound, select_sound, stop_preview,
+    update_volume, PreviewCache,
 };
 use features::autostart::{is_auto_launch_enabled, set_auto_launch};
 
@@ -50,6 +50,7 @@ fn main() {
             download_sound,
             preview_pack_sound,
             preview_catalog_pack,
+            stop_preview,
             get_sounds,
             get_selected_sound,
             select_sound,

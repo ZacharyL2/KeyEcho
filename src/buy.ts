@@ -1,5 +1,6 @@
 import { createSignal } from 'solid-js';
 
+import type { OnlineSound } from './catalog';
 import { pushActivationKey } from './deeplink';
 import type { Notify } from './notify';
 import { KEYECHO_ORIGIN } from './origin';
@@ -13,8 +14,13 @@ const POLL_MAX_MS = 120_000; // ~2 min, then say so; the key can still be pasted
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Which checkout is open in the browser, so the rows can say they are waiting. */
-export type PurchaseTarget = { kind: 'all' } | { kind: 'pack'; slug: string };
+/**
+ * Which checkout is open in the browser and what it buys, so every Buy sheet
+ * and bar can show it while waiting.
+ */
+export type PurchaseTarget =
+  | { kind: 'all' }
+  | { kind: 'pack'; pack: OnlineSound };
 
 const [pendingPurchase, setPendingPurchase] =
   createSignal<PurchaseTarget | null>(null);
@@ -114,19 +120,64 @@ async function openStore(
   void pollPurchase(nonce, notify, openLicense);
 }
 
+let openingPurchase: Promise<void> | null = null;
+
+async function launchCheckout(
+  target: string,
+  purchase: PurchaseTarget,
+  notify: Notify,
+  openLicense: () => void,
+  source: { campaign: string; content?: string },
+) {
+  if (openingPurchase) {
+    return openingPurchase;
+  }
+  // Share the in-flight opener so overlapping clicks cannot split the nonce.
+  openingPurchase = openStore(
+    target,
+    purchase,
+    notify,
+    openLicense,
+    source.campaign,
+    source.content,
+  );
+  try {
+    await openingPurchase;
+  } finally {
+    openingPurchase = null;
+  }
+}
+
 export async function startBuyFlow(
   notify: Notify,
   openLicense: () => void,
   source: { campaign: string; content?: string } = { campaign: 'browse_offer' },
 ) {
-  // Straight to the offer: the button already said what it buys.
-  await openStore(
+  await launchCheckout(
     `${CATALOG_URL}#get`,
     { kind: 'all' },
     notify,
     openLicense,
-    source.campaign,
-    source.content,
+    source,
+  );
+}
+
+/** One pack: its page on the site, same nonce handoff and polling. */
+export async function startPackBuyFlow(
+  pack: OnlineSound,
+  notify: Notify,
+  openLicense: () => void,
+  source: { campaign: string; content?: string } = {
+    campaign: 'pack_row',
+    content: pack.slug,
+  },
+) {
+  await launchCheckout(
+    `${CATALOG_URL}/${encodeURIComponent(pack.slug)}#get`,
+    { kind: 'pack', pack },
+    notify,
+    openLicense,
+    source,
   );
 }
 

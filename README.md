@@ -86,3 +86,6 @@ pnpm build         # Tauri production build
 ## License
 
 KeyEcho is released under the [AGPL-3.0 license](./LICENSE).
+
+The interface icons come from [Hugeicons Free](https://hugeicons.com) under the
+MIT license; its notice is in [src/icons.LICENSE.md](./src/icons.LICENSE.md).

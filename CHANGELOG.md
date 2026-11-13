@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.2.0
+
+### Features
+
+- A new look: the window takes the colours of the pack's sound type, pack names are set in a serif face, and the home screen shows a cross-section of the key mechanism. Light and dark themes follow the system
+- Browse packs by sound type in a three-column grid, and press `/` to search
+- Keyboard shortcuts in the window: ←/→ change pack, ↑/↓ change volume, `/` finds a pack, and ⌘, (Ctrl+, on Windows and Linux) opens Settings
+- Settings in one place: license, All Sounds Forever, open at login, the sounds folder, what's new and the version
+- Buy a single pack or All Sounds Forever without leaving the app
+- When keyecho.app runs a limited-time offer, the app shows it, with the regular price struck through, until the offer ends
+- On a fresh install with no packs, download and select a free pack, so typing makes sound right away. If you are offline, the status bar offers Retry, and KeyEcho tries again when the connection returns
+- Browse packs checks a saved license key. Paid packs you already own show Download instead of Unlock all, and the All Sounds Forever offer is hidden once you own every Crafted Pack
+
+### Fixes
+
+- Give every checkout its own purchase code, so a new purchase never picks up the key from an earlier one. Clicking buy twice opens one checkout, and cancelling stops checking for it
+- Keep the installed copy of a pack when a new download of it is damaged or incomplete
+- Save settings to a temporary file and then swap it in, instead of overwriting the pack list in place
+- Sending a lost key to your email confirms only after keyecho.app accepts the request, and server errors now show as errors
+
 ## v1.1.1
 
 ### Features

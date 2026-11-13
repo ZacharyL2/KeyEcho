@@ -1,0 +1,77 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "options": {
+    "typeAware": true,
+    "typeCheck": true
+  },
+  "env": {
+    "node": true,
+    "browser": true,
+    "es2024": true
+  },
+  "rules": {
+    "no-console": "off",
+    "no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "ignoreRestSiblings": true
+      }
+    ],
+    "typescript/no-explicit-any": "warn",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-unnecessary-type-assertion": "off",
+    "typescript/no-unsafe-type-assertion": "off",
+    "typescript/no-base-to-string": "warn",
+    "typescript/no-misused-spread": "warn",
+    "typescript/require-array-sort-compare": "warn",
+    "typescript/unbound-method": "warn",
+    "typescript/restrict-template-expressions": "warn",
+    "unicorn/no-new-array": "off",
+    "no-control-regex": "warn",
+    "unicorn/no-useless-fallback-in-spread": "off",
+    "unicorn/no-thenable": "off",
+    "unicorn/prefer-string-starts-ends-with": "warn",
+    "unicorn/no-useless-spread": "warn",
+    "typescript/no-redundant-type-constituents": "warn",
+    "typescript/no-useless-default-assignment": "warn"
+  },
+  "ignorePatterns": [
+    ".jig",
+    "node_modules",
+    ".output",
+    ".nitro",
+    ".tanstack",
+    ".vinxi",
+    ".wrangler",
+    "dist",
+    "coverage",
+    "drizzle",
+    "**/gen/**",
+    "**/*.gen.ts",
+    "**/*.generated.ts",
+    "worker-configuration.d.ts",
+    "bindings.ts",
+    "auto-imports.d.ts"
+  ],
+  "overrides": [
+    {
+      "files": ["e2e/**"],
+      "rules": {
+        "no-empty-pattern": "off"
+      }
+    },
+    {
+      "files": ["**/*.tsx"],
+      "rules": {
+        "no-unassigned-vars": "off"
+      }
+    }
+  ]
+}

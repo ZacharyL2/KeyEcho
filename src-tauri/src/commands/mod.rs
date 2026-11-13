@@ -479,6 +479,12 @@ pub async fn preview_catalog_pack(
     Ok(())
 }
 
+// Stop a catalog preview before its burst ends.
+#[tauri::command]
+pub fn stop_preview(player: State<SoundPlayer>) {
+    player.stop_sample();
+}
+
 // One client for the app, so back-to-back CDN fetches reuse a connection.
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();

@@ -2,11 +2,14 @@ import assert from 'node:assert/strict';
 import { afterEach, test, vi } from 'vitest';
 
 const opened = vi.hoisted((): string[] => []);
+const openExternalUrl = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ status: 'ok', data: null }),
+);
 vi.mock('./services/bindings', () => ({
   commands: {
     openExternalUrl: async (url: string) => {
       opened.push(url);
-      return { status: 'ok', data: null };
+      return openExternalUrl();
     },
   },
 }));
@@ -15,12 +18,14 @@ vi.mock('@tauri-apps/plugin-deep-link', () => ({
   onOpenUrl: async () => () => {},
 }));
 
-const { cancelPurchase, pendingPurchase, startBuyFlow } = await import('./buy');
+const { cancelPurchase, pendingPurchase, startBuyFlow, startPackBuyFlow } =
+  await import('./buy');
 const { activationKey } = await import('./deeplink');
 
 afterEach(() => {
   cancelPurchase();
   opened.length = 0;
+  openExternalUrl.mockReset().mockResolvedValue({ status: 'ok', data: null });
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -38,6 +43,103 @@ function openedNonce(index: number): string | null {
   const url = opened[index];
   return url ? new URL(url).searchParams.get('buy_nonce') : null;
 }
+
+test('overlapping checkout launches open only one checkout and activate its paid key', async () => {
+  vi.useFakeTimers();
+  let resolveOpen!: (result: { status: 'ok'; data: null }) => void;
+  openExternalUrl.mockImplementationOnce(
+    () => new Promise((resolve) => (resolveOpen = resolve)),
+  );
+  stubStatusPaidFor(() => openedNonce(0), 'KEY-FROM-OVERLAPPING-CHECKOUT');
+
+  const first = startBuyFlow(
+    () => {},
+    () => {},
+  );
+  const second = startBuyFlow(
+    () => {},
+    () => {},
+  );
+  resolveOpen({ status: 'ok', data: null });
+  await Promise.all([first, second]);
+  await vi.advanceTimersByTimeAsync(2000);
+
+  assert.equal(opened.length, 1);
+  assert.ok(openedNonce(0));
+  assert.equal(activationKey(), 'KEY-FROM-OVERLAPPING-CHECKOUT');
+  assert.equal(pendingPurchase(), null);
+});
+
+test('a failed browser opener allows a fresh checkout launch', async () => {
+  openExternalUrl.mockResolvedValueOnce({
+    status: 'error',
+    error: 'unavailable',
+  });
+  const notices: string[] = [];
+  await startBuyFlow(
+    (message) => void notices.push(message),
+    () => {},
+  );
+  assert.equal(pendingPurchase(), null);
+  assert.deepEqual(notices, ["Couldn't open keyecho.app"]);
+
+  await startBuyFlow(
+    () => {},
+    () => {},
+  );
+  assert.equal(opened.length, 2);
+  assert.notEqual(openedNonce(0), openedNonce(1));
+  assert.deepEqual(pendingPurchase(), { kind: 'all' });
+});
+
+test('a rejected browser opener does not block the next checkout launch', async () => {
+  openExternalUrl.mockRejectedValueOnce(new Error('opener disconnected'));
+  await assert.rejects(
+    startBuyFlow(
+      () => {},
+      () => {},
+    ),
+    /opener disconnected/,
+  );
+  assert.equal(pendingPurchase(), null);
+
+  await startBuyFlow(
+    () => {},
+    () => {},
+  );
+  assert.equal(opened.length, 2);
+  assert.notEqual(openedNonce(0), openedNonce(1));
+  assert.deepEqual(pendingPurchase(), { kind: 'all' });
+});
+
+test('a single-pack checkout opens the pack page and activates the key it paid for', async () => {
+  vi.useFakeTimers();
+  stubStatusPaidFor(() => openedNonce(0), 'KEY-FOR-ONE-PACK');
+
+  const typewriter = {
+    id: 'newsroom-typewriter',
+    name: 'Newsroom Typewriter',
+    slug: 'newsroom-typewriter',
+    tier: 'paid',
+    priceUsd: 3.99,
+  };
+  await startPackBuyFlow(
+    typewriter,
+    () => {},
+    () => {},
+  );
+  const url = new URL(opened[0]);
+  assert.equal(url.pathname, '/packs/newsroom-typewriter');
+  assert.equal(url.hash, '#get');
+  assert.equal(url.searchParams.get('utm_campaign'), 'pack_row');
+  assert.equal(url.searchParams.get('utm_content'), 'newsroom-typewriter');
+  assert.ok(openedNonce(0));
+  assert.deepEqual(pendingPurchase(), { kind: 'pack', pack: typewriter });
+
+  await vi.advanceTimersByTimeAsync(2000);
+  assert.equal(activationKey(), 'KEY-FOR-ONE-PACK');
+  assert.equal(pendingPurchase(), null);
+});
 
 test('each in-app checkout carries its own purchase nonce', async () => {
   const stored = new Map<string, string>();

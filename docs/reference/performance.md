@@ -117,6 +117,5 @@ Last full verification for the v1.0 branch:
 - `rtk pnpm run bench:audio`: 2 ignored-by-default reference benchmarks passed
 - `rtk cargo check --manifest-path src-tauri\Cargo.toml`: passed
 
-The Rust tests cover shared sample storage, bounded queue capacity, press/release
-gating, runtime sound-pack memory limits, slice dedupe, lock-free playback state
-updates, and bundled sound-pack budgets.
+The Rust tests cover shared sample storage, press/release gating, the runtime
+sound-pack memory limit, and lock-free playback state updates.
