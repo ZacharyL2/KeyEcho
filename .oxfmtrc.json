@@ -13,7 +13,6 @@
     }
   ],
   "ignorePatterns": [
-    ".jig",
     "pnpm-lock.yaml",
     ".output",
     ".nitro",

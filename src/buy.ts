@@ -7,7 +7,6 @@ import { KEYECHO_ORIGIN } from './origin';
 import { commands } from './services/bindings';
 
 const CATALOG_URL = `${KEYECHO_ORIGIN}/packs`;
-const SOUND_TEST_URL = `${KEYECHO_ORIGIN}/keyboard-sound-test`;
 const STATUS_URL = `${KEYECHO_ORIGIN}/packs/purchase-status`;
 const POLL_INTERVAL_MS = 2000;
 const POLL_MAX_MS = 120_000; // ~2 min, then say so; the key can still be pasted
@@ -179,8 +178,4 @@ export async function startPackBuyFlow(
     openLicense,
     source,
   );
-}
-
-export async function startSoundTestFlow(notify: Notify) {
-  await openStore(SOUND_TEST_URL, null, notify, () => {}, 'sound_test');
 }

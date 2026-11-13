@@ -142,6 +142,9 @@ export function PacksPage(props: {
           value={props.query}
           onInput={(event) => props.onQuery(event.currentTarget.value)}
           onKeyDown={(event) => {
+            if (event.isComposing) {
+              return; // the IME owns these keys while composing
+            }
             if (event.key === 'Escape') {
               event.preventDefault();
               if (props.query) {

@@ -130,14 +130,6 @@ fn default_volume() -> f32 {
     1.0
 }
 
-fn meter_step(volume: f32) -> u8 {
-    match volume {
-        v if v.is_nan() || v <= 0.0 => 0,
-        v if v < 0.34 => 1,
-        v if v < 0.67 => 2,
-        _ => 3,
-    }
-}
 
 // Up to 150%: quiet packs gain headroom; beyond that the loudest pack clips.
 const MAX_VOLUME: f32 = 1.5;
@@ -167,15 +159,6 @@ impl PlaybackSoundpack {
 
     fn set_volume(&self, volume: f32) {
         self.volume_bits.store(volume.to_bits(), Ordering::Relaxed);
-    }
-
-    /// Status-bar meter step, 0-3. Zero means nothing will be heard: no pack
-    /// loaded, or the volume is down.
-    pub(super) fn meter_level(&self) -> u8 {
-        if self.current_sound.load().is_none() {
-            return 0;
-        }
-        meter_step(f32::from_bits(self.volume_bits.load(Ordering::Relaxed)))
     }
 
     pub(super) fn volume(&self) -> f32 {
@@ -277,16 +260,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{copy_missing_dir, meter_step, normalize_volume, SoundOption, SoundpackConfig};
-
-    #[test]
-    fn meter_step_reports_silence_as_zero_and_full_volume_as_three() {
-        assert_eq!(meter_step(0.0), 0);
-        assert_eq!(meter_step(f32::NAN), 0);
-        assert_eq!(meter_step(0.2), 1);
-        assert_eq!(meter_step(0.5), 2);
-        assert_eq!(meter_step(1.0), 3);
-    }
+    use super::{copy_missing_dir, normalize_volume, SoundOption, SoundpackConfig};
 
     #[test]
     fn normalize_volume_clamps_to_supported_range() {

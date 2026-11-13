@@ -4,21 +4,21 @@
 
 ### Features
 
-- A new look: the window takes the colours of the pack's sound type, pack names are set in a serif face, and the home screen shows a cross-section of the key mechanism. Light and dark themes follow the system
+- New look: colours follow the pack's sound type, a key cross-section on Home, light and dark themes
 - Browse packs by sound type in a three-column grid, and press `/` to search
-- Keyboard shortcuts in the window: ←/→ change pack, ↑/↓ change volume, `/` finds a pack, and ⌘, (Ctrl+, on Windows and Linux) opens Settings
-- Settings in one place: license, All Sounds Forever, open at login, the sounds folder, what's new and the version
-- Buy a single pack or All Sounds Forever without leaving the app
-- When keyecho.app runs a limited-time offer, the app shows it, with the regular price struck through, until the offer ends
-- On a fresh install with no packs, download and select a free pack, so typing makes sound right away. If you are offline, the status bar offers Retry, and KeyEcho tries again when the connection returns
-- Browse packs checks a saved license key. Paid packs you already own show Download instead of Unlock all, and the All Sounds Forever offer is hidden once you own every Crafted Pack
+- Window shortcuts: ←/→ change pack, ↑/↓ change volume, `/` finds a pack, ⌘, (Ctrl+,) opens Settings
+- Settings sheet: license, All Sounds Forever, open at login, sounds folder, what's new and version
+- Buy a single pack or All Sounds Forever from the app: pay on keyecho.app and the pack unlocks automatically
+- When keyecho.app runs a limited-time offer, the app shows it with the regular price struck through until it ends
+- On a fresh install with no packs, KeyEcho downloads and selects a free pack; if offline, it offers Retry and tries again when reconnected
+- Pack browsing checks your saved license key: owned paid packs show Owned and download directly, and All Sounds Forever hides once you own every paid pack
 
 ### Fixes
 
-- Give every checkout its own purchase code, so a new purchase never picks up the key from an earlier one. Clicking buy twice opens one checkout, and cancelling stops checking for it
+- Give each checkout its own purchase code so it never picks up an earlier key; clicking buy twice opens one checkout, and cancelling stops checking for it
 - Keep the installed copy of a pack when a new download of it is damaged or incomplete
-- Save settings to a temporary file and then swap it in, instead of overwriting the pack list in place
-- Sending a lost key to your email confirms only after keyecho.app accepts the request, and server errors now show as errors
+- Save settings to a temporary file before swapping it in, instead of overwriting them in place
+- Requesting a lost key by email now confirms only after keyecho.app accepts it, and server errors show as errors
 
 ## v1.1.1
 

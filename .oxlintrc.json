@@ -43,7 +43,6 @@
     "typescript/no-useless-default-assignment": "warn"
   },
   "ignorePatterns": [
-    ".jig",
     "node_modules",
     ".output",
     ".nitro",

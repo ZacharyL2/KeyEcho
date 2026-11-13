@@ -26,9 +26,12 @@ export function Sheet(props: {
     (first ?? panel)?.focus();
   });
   onCleanup(() => {
-    if (opener instanceof HTMLElement && opener.isConnected) {
-      opener.focus();
-    }
+    // After this tick the page behind is no longer inert and can take focus.
+    queueMicrotask(() => {
+      if (opener instanceof HTMLElement && opener.isConnected) {
+        opener.focus();
+      }
+    });
   });
 
   return (
@@ -42,6 +45,9 @@ export function Sheet(props: {
         role="dialog"
         tabIndex={-1}
         onKeyDown={(event) => {
+          if (event.isComposing) {
+            return;
+          }
           if (event.key === 'Escape') {
             event.preventDefault();
             event.stopPropagation();
@@ -58,10 +64,16 @@ export function Sheet(props: {
             if (!first || !last) {
               return;
             }
-            if (event.shiftKey && document.activeElement === first) {
+            // From the panel itself, or after the focused button went away,
+            // wrap too rather than letting focus leave the sheet.
+            const at = items.indexOf(document.activeElement as HTMLElement);
+            if (event.shiftKey && at <= 0) {
               event.preventDefault();
               last.focus();
-            } else if (!event.shiftKey && document.activeElement === last) {
+            } else if (
+              !event.shiftKey &&
+              (at === -1 || at === items.length - 1)
+            ) {
               event.preventDefault();
               first.focus();
             }

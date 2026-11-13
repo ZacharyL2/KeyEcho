@@ -11,9 +11,10 @@ import {
   Switch,
 } from 'solid-js';
 
+import tauriConfig from '../src-tauri/tauri.conf.json';
 import * as s from './App.css';
-import { startSoundTestFlow } from './buy';
 import { BuySheet } from './BuySheet';
+import { cancelPurchase } from './buy';
 import type { OnlineSound } from './catalog';
 import {
   catalogCounts,
@@ -40,6 +41,7 @@ import {
   activateLicense,
   loadSelectedSound,
   loadSounds,
+  openExternalUrl,
   selectPackById,
   unwrapCommand,
 } from './library';
@@ -50,6 +52,7 @@ import {
 } from './license';
 import { LicenseSheet } from './LicenseSheet';
 import { ALL_ACCESS_PRICE_USD, activeAllAccessPromo, formatUsd } from './offer';
+import { KEYECHO_ORIGIN } from './origin';
 import { SettingsSheet } from './SettingsSheet';
 import { DockOffer, SlimOffer } from './OfferBar';
 import type { PackShelf } from './packs';
@@ -57,6 +60,7 @@ import {
   CATEGORY_IDS,
   isCategoryId,
   moveInGrid,
+  PACK_SHELVES,
   stepShelf,
   tintFor,
 } from './packs';
@@ -77,8 +81,9 @@ import { createNotifier, Toasts } from './Toasts';
 import { UpdateStrip } from './UpdateStrip';
 import { createVolumeControl } from './volume';
 
-const APP_VERSION = '1.1.2';
-const UPDATE_TITLE = 'Fixes for checkout and pack installs';
+const APP_VERSION = tauriConfig.version;
+const UPDATE_TITLE = 'A new look, shortcuts and Settings';
+const UPDATES_URL = `${KEYECHO_ORIGIN}/updates`;
 const UPDATE_DISMISSED_KEY = `keyecho:v${APP_VERSION}:update-dismissed`;
 
 function hasDismissedUpdate(): boolean {
@@ -328,24 +333,36 @@ export default function App() {
 
   // ---- packs ----
 
+  let selectQueue: Promise<unknown> = Promise.resolve();
+  let selectTicket = 0;
   const handleSelect = async (value: string) => {
     if (!value) {
       return;
     }
     selectedSoundControls.mutate(value);
+    const ticket = ++selectTicket;
 
     // Selecting decodes the whole pack in Rust, which takes a moment — without
     // this the window looks idle and the audition seems to fire late.
     setPreparing(true);
+    // One select at a time, in click order: a big pack decoding slowly must
+    // not land after, and override, a pack picked later.
+    const run = selectQueue.then(() => commands.selectSound(value));
+    selectQueue = run.catch(() => undefined);
     try {
-      const result = await commands.selectSound(value);
+      const result = await run;
+      if (ticket !== selectTicket) {
+        return;
+      }
       if (result.status === 'error') {
         notify("That pack didn't load. Download it again.", { tone: 'error' });
       } else {
         void commands.previewPackSound(); // hear what you picked
       }
     } finally {
-      setPreparing(false);
+      if (ticket === selectTicket) {
+        setPreparing(false);
+      }
     }
 
     await selectedSoundControls.refetch();
@@ -608,6 +625,7 @@ export default function App() {
         if (!trimmed) {
           return;
         }
+        cancelPurchase(); // the key is here; stop polling for it
         if (sheet()?.kind === 'buy') {
           setSheet(null);
         }
@@ -675,6 +693,10 @@ export default function App() {
         break;
       case 'pack':
         if (current === 'first') {
+          // A clicked category word keeps focus; enter would click it again.
+          if (document.activeElement instanceof HTMLElement) {
+            document.activeElement.blur();
+          }
           const index = CATEGORY_IDS.indexOf(firstShown());
           const count = CATEGORY_IDS.length;
           setFirstCategory(
@@ -692,9 +714,17 @@ export default function App() {
         volume.change(level + shortcut.delta);
         break;
       }
-      case 'shelf':
+      case 'shelf': {
+        // Past the last shelf (or before the first), Tab moves focus on to
+        // the page's buttons instead of wrapping, so it can't trap the keyboard.
+        const index = PACK_SHELVES.indexOf(shelf());
+        const edge = shortcut.delta > 0 ? PACK_SHELVES.length - 1 : 0;
+        if (index === edge) {
+          return;
+        }
         pickShelf(stepShelf(shelf(), shortcut.delta), true);
         break;
+      }
       case 'move': {
         if (document.activeElement instanceof HTMLElement) {
           document.activeElement.blur();
@@ -769,161 +799,163 @@ export default function App() {
 
   return (
     <div class={`${s.window} ${categoryTint[windowTint()]}`}>
-      <Switch>
-        <Match when={view() === 'packs'}>
-          <PacksPage
-            cards={cards()}
-            counts={counts()}
-            dock={
-              <>
-                <Show when={!sheet()}>{flowToasts()}</Show>
-                <Show when={!owner() && packsState() === 'ready'}>
-                  <DockOffer
-                    paid={counts()?.paid}
-                    promo={promo()}
-                    onGet={() => openBuy(null, 'browse_offer')}
+      <div class={s.page} inert={sheet() !== null}>
+        <Switch>
+          <Match when={view() === 'packs'}>
+            <PacksPage
+              cards={cards()}
+              counts={counts()}
+              dock={
+                <>
+                  <Show when={!sheet()}>{flowToasts()}</Show>
+                  <Show when={!owner() && packsState() === 'ready'}>
+                    <DockOffer
+                      paid={counts()?.paid}
+                      promo={promo()}
+                      onGet={() => openBuy(null, 'browse_offer')}
+                    />
+                  </Show>
+                  <Show
+                    fallback={<HintRow trailing={[['esc', 'back']]} />}
+                    when={packsState() === 'ready' || shelf() === 'yours'}
+                  >
+                    <HintRow
+                      keys={packsHintKeys(
+                        selected(),
+                        cards().length,
+                        downloadingId() !== null,
+                        preview.playingId() !== null &&
+                          preview.playingId() === selected()?.online?.id,
+                      )}
+                      trailing={[['esc', 'back']]}
+                    />
+                  </Show>
+                </>
+              }
+              downloadingId={downloadingId()}
+              preview={preview}
+              query={query()}
+              searchRef={(element) => (searchInput = element)}
+              selected={selectedCard()}
+              shelf={shelf()}
+              state={packsState()}
+              totalCount={counts()?.total ?? null}
+              offline={offline()}
+              onAction={runCardAction}
+              onBack={closePacks}
+              onQuery={(next) => {
+                setQuery(next);
+                setSelectedCard(-1);
+              }}
+              onRetry={() => void catalogControls.refetch()}
+              onSelect={setSelectedCard}
+              onShelf={(next) => pickShelf(next, false)}
+              onSoundsFolder={() => void openSoundsFolder()}
+            />
+          </Match>
+          <Match when={view() === 'home'}>
+            <HomeScroll>
+              <Switch>
+                <Match when={shownHome() === 'pending'}>
+                  <SleevePending />
+                </Match>
+                <Match when={shownHome() === 'home'}>
+                  <Sleeve
+                    offline={offline()}
+                    pack={sleevePack()}
+                    status={sleeveStatus()}
+                    tape={tape()}
+                    title={sleeveTitle()}
+                    owner={owner()}
+                    unlock={unlock()}
+                    onChangePack={() => openPacks(true)}
+                    onUnlock={() => openBuy(null, 'home_badge')}
                   />
-                </Show>
-                <Show
-                  fallback={<HintRow trailing={[['esc', 'back']]} />}
-                  when={packsState() === 'ready' || shelf() === 'yours'}
-                >
-                  <HintRow
-                    keys={packsHintKeys(
-                      selected(),
-                      cards().length,
-                      downloadingId() !== null,
-                      preview.playingId() !== null &&
-                        preview.playingId() === selected()?.online?.id,
-                    )}
-                    trailing={[['esc', 'back']]}
+                </Match>
+                <Match when={firstLaunch()}>
+                  <FirstLaunchSleeve
+                    category={firstShown()}
+                    action={firstActionNow()}
+                    offline={offline()}
+                    pack={starterChoice()}
+                    previewing={{
+                      loading: preview.loadingId() === starterChoice()?.id,
+                      playing: preview.playingId() === starterChoice()?.id,
+                    }}
+                    tape={firstTape()}
+                    onBuy={firstAction}
+                    onCategory={setFirstCategory}
+                    onDownload={firstAction}
+                    onPreview={() => {
+                      const id = starterChoice()?.id;
+                      if (id) {
+                        void preview.preview(id);
+                      }
+                    }}
                   />
-                </Show>
-              </>
-            }
-            downloadingId={downloadingId()}
-            preview={preview}
-            query={query()}
-            searchRef={(element) => (searchInput = element)}
-            selected={selectedCard()}
-            shelf={shelf()}
-            state={packsState()}
-            totalCount={counts()?.total ?? null}
-            offline={offline()}
-            onAction={runCardAction}
-            onBack={closePacks}
-            onQuery={(next) => {
-              setQuery(next);
-              setSelectedCard(-1);
-            }}
-            onRetry={() => void catalogControls.refetch()}
-            onSelect={setSelectedCard}
-            onShelf={(next) => pickShelf(next, false)}
-            onSoundsFolder={() => void openSoundsFolder()}
-          />
-        </Match>
-        <Match when={view() === 'home'}>
-          <HomeScroll>
+                </Match>
+              </Switch>
+              <HomeControls
+                volume={volume.volume()}
+                volumeLoading={volume.loading()}
+                onVolume={volume.change}
+                onVolumeRetry={
+                  volume.failed() ? () => void volume.refresh() : undefined
+                }
+              />
+              <Show when={updateVisible()}>
+                <UpdateStrip
+                  title={UPDATE_TITLE}
+                  version={APP_VERSION}
+                  onDismiss={() => {
+                    rememberUpdateDismissed();
+                    setUpdateVisible(false);
+                  }}
+                  onWhatsNew={() => void openExternalUrl(UPDATES_URL, notify)}
+                />
+              </Show>
+              <Show when={shownHome() === 'home' && promo()}>
+                {(active) => (
+                  <SlimOffer
+                    promo={active()}
+                    onGet={() => openBuy(null, 'home_offer')}
+                  />
+                )}
+              </Show>
+              <Show when={firstLaunch() && counts()?.total}>
+                {(count) => (
+                  <HomeFoot count={count()} onBrowse={() => openPacks(false)} />
+                )}
+              </Show>
+            </HomeScroll>
+            <Show when={!sheet()}>{flowToasts()}</Show>
             <Switch>
               <Match when={shownHome() === 'pending'}>
-                <SleevePending />
+                <HintRow />
               </Match>
               <Match when={shownHome() === 'home'}>
-                <Sleeve
-                  offline={offline()}
-                  pack={sleevePack()}
-                  status={sleeveStatus()}
-                  tape={tape()}
-                  title={sleeveTitle()}
-                  owner={owner()}
-                  unlock={unlock()}
-                  onChangePack={() => openPacks(true)}
-                  onUnlock={() => openBuy(null, 'home_badge')}
-                />
+                <HintRow
+                  keys={homeHintKeys(hasSounds(), volume.volume() !== null)}
+                  note={homeNote()}
+                >
+                  {homeLinks()}
+                </HintRow>
               </Match>
               <Match when={firstLaunch()}>
-                <FirstLaunchSleeve
-                  category={firstShown()}
-                  action={firstActionNow()}
-                  offline={offline()}
-                  pack={starterChoice()}
-                  previewing={{
-                    loading: preview.loadingId() === starterChoice()?.id,
-                    playing: preview.playingId() === starterChoice()?.id,
-                  }}
-                  tape={firstTape()}
-                  onBuy={firstAction}
-                  onCategory={setFirstCategory}
-                  onDownload={firstAction}
-                  onPreview={() => {
-                    const id = starterChoice()?.id;
-                    if (id) {
-                      void preview.preview(id);
-                    }
-                  }}
-                />
+                <HintRow
+                  keys={firstLaunchHintKeys(
+                    firstActionNow(),
+                    preview.playingId() !== null &&
+                      preview.playingId() === starterChoice()?.id,
+                  )}
+                >
+                  {homeLinks()}
+                </HintRow>
               </Match>
             </Switch>
-            <HomeControls
-              volume={volume.volume()}
-              volumeLoading={volume.loading()}
-              onVolume={volume.change}
-              onVolumeRetry={
-                volume.failed() ? () => void volume.refresh() : undefined
-              }
-            />
-            <Show when={updateVisible()}>
-              <UpdateStrip
-                title={UPDATE_TITLE}
-                version={APP_VERSION}
-                onDismiss={() => {
-                  rememberUpdateDismissed();
-                  setUpdateVisible(false);
-                }}
-                onWhatsNew={() => void startSoundTestFlow(notify)}
-              />
-            </Show>
-            <Show when={shownHome() === 'home' && promo()}>
-              {(active) => (
-                <SlimOffer
-                  promo={active()}
-                  onGet={() => openBuy(null, 'home_offer')}
-                />
-              )}
-            </Show>
-            <Show when={firstLaunch() && counts()?.total}>
-              {(count) => (
-                <HomeFoot count={count()} onBrowse={() => openPacks(false)} />
-              )}
-            </Show>
-          </HomeScroll>
-          <Show when={!sheet()}>{flowToasts()}</Show>
-          <Switch>
-            <Match when={shownHome() === 'pending'}>
-              <HintRow />
-            </Match>
-            <Match when={shownHome() === 'home'}>
-              <HintRow
-                keys={homeHintKeys(hasSounds(), volume.volume() !== null)}
-                note={homeNote()}
-              >
-                {homeLinks()}
-              </HintRow>
-            </Match>
-            <Match when={firstLaunch()}>
-              <HintRow
-                keys={firstLaunchHintKeys(
-                  firstActionNow(),
-                  preview.playingId() !== null &&
-                    preview.playingId() === starterChoice()?.id,
-                )}
-              >
-                {homeLinks()}
-              </HintRow>
-            </Match>
-          </Switch>
-        </Match>
-      </Switch>
+          </Match>
+        </Switch>
+      </div>
 
       <Switch>
         <Match when={sheet()?.kind === 'settings'}>
@@ -940,7 +972,7 @@ export default function App() {
             onLicense={openLicense}
             onSoundsFolder={() => void openSoundsFolder()}
             onUnlockAll={() => openBuy(null, 'settings')}
-            onWhatsNew={() => void startSoundTestFlow(notify)}
+            onWhatsNew={() => void openExternalUrl(UPDATES_URL, notify)}
           />
         </Match>
         <Match when={sheet()?.kind === 'license'}>

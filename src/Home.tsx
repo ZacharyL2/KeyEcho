@@ -473,8 +473,12 @@ function pressHint(event: MouseEvent, glyph: string) {
   if (!key) {
     return;
   }
-  // A focused button would swallow space and enter as its own click.
+  // A focused button would swallow space and enter as its own click, and a
+  // focused search box would take the key as typing.
   (event.currentTarget as HTMLElement).blur();
+  if (document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur();
+  }
   window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
 }
 
